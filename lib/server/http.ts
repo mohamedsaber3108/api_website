@@ -88,7 +88,17 @@ export function parseQuery<S extends z.ZodTypeAny>(request: Request, schema: S):
   return parsed.data;
 }
 
+/**
+ * On Cloudflare, cf-connecting-ip is authoritative. Behind our own reverse proxy (EC2 + Caddy) the
+ * local runtime sets cf-connecting-ip to the proxy's address, so the proxy passes the real client IP
+ * in a header it always overwrites, named by CLIENT_IP_HEADER (e.g. "x-real-ip").
+ */
 export function clientIp(request: Request): string {
+  const trusted = (env.CLIENT_IP_HEADER || '').trim().toLowerCase();
+  if (trusted) {
+    const v = request.headers.get(trusted)?.split(',')[0]?.trim();
+    if (v) return v;
+  }
   return request.headers.get('cf-connecting-ip') || request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
 }
 

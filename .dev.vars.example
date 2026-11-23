@@ -17,6 +17,9 @@ DEFAULT_MARKUP_PERCENT=20
 # Trust oai-authenticated-* identity headers ("Sign in with ChatGPT"). Set "true" ONLY on the
 # ChatGPT hosting platform. On EC2 or any other host leave it unset: clients could forge them.
 TRUST_CHATGPT_HEADERS=false
+# Behind your own reverse proxy (EC2 + Caddy): header with the real client IP, used for rate limits.
+# Leave empty on Cloudflare (cf-connecting-ip is used). Only set it if the proxy always overwrites the header.
+CLIENT_IP_HEADER=
 # Optional free credit for new accounts (USD).
 SIGNUP_BONUS_USD=0
 

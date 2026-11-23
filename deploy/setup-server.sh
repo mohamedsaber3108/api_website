@@ -59,6 +59,7 @@ PUBLIC_BASE_URL=http://${ip:-YOUR_PUBLIC_IP}
 # Comma separated; admins once verified. Or promote directly: sudo bash ${APP_ROOT}/current/deploy/make-admin.sh you@example.com
 ADMIN_EMAILS=
 TRUST_CHATGPT_HEADERS=false
+CLIENT_IP_HEADER=x-real-ip
 DEFAULT_MARKUP_PERCENT=20
 SIGNUP_BONUS_USD=0
 # Paid inference (needs a provider agreement that allows resale)
@@ -74,6 +75,9 @@ EOF
 fi
 chown root:wasl "$ENV_FILE"
 chmod 640 "$ENV_FILE"
+
+# Settings added after the first install; append if missing (existing values are never changed).
+grep -q '^CLIENT_IP_HEADER=' "$ENV_FILE" || echo 'CLIENT_IP_HEADER=x-real-ip' >> "$ENV_FILE"
 
 echo "==> systemd unit"
 cat > /etc/systemd/system/wasl.service <<EOF
@@ -125,6 +129,8 @@ cat > /etc/caddy/Caddyfile <<'EOF'
 		header_up -Oai-Authenticated-User-Full-Name-Encoding
 		header_up -Cf-Connecting-Ip
 		header_up X-Forwarded-For {remote_host}
+		# Always overwritten, so clients cannot spoof it. The app reads it via CLIENT_IP_HEADER.
+		header_up X-Real-IP {remote_host}
 		flush_interval -1
 	}
 	header {

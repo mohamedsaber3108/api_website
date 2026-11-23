@@ -22,6 +22,8 @@ declare namespace Cloudflare {
     RESEND_API_KEY?: string;
     /** From address for transactional email, e.g. "Wasl AI <no-reply@wasl.example>". */
     EMAIL_FROM?: string;
+    /** Header carrying the real client IP, set (and overwritten) by our reverse proxy. "x-real-ip" on EC2. */
+    CLIENT_IP_HEADER?: string;
     /** "true" only on the ChatGPT hosting platform, which sets and sanitises oai-authenticated-* headers. */
     TRUST_CHATGPT_HEADERS?: string;
     /** Signup bonus in USD for new accounts. Default 0. */
