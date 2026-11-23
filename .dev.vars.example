@@ -1,0 +1,31 @@
+# Copy to .dev.vars for local development. Never commit real secrets.
+# In production set these with `wrangler secret put NAME` (secrets) or [vars] (non-secrets).
+
+# Only "development" echoes verify/reset tokens in auth API responses. Any other value
+# (or unset) is treated as production. Never set "development" on a public deployment.
+APP_ENV=development
+# Public origin used in emails and Stripe redirects.
+PUBLIC_BASE_URL=http://127.0.0.1:5173
+# Comma separated. These accounts become admins once their email is verified.
+ADMIN_EMAILS=admin@example.com
+
+# Paid inference gateway (/api/v1/chat/completions). Both are required to enable it.
+INFERENCE_ENABLED=false
+OPENROUTER_API_KEY=
+# Percent added on top of provider cost. Per-model overrides live in the admin console.
+DEFAULT_MARKUP_PERCENT=20
+# Trust oai-authenticated-* identity headers ("Sign in with ChatGPT"). Set "true" ONLY on the
+# ChatGPT hosting platform. On EC2 or any other host leave it unset: clients could forge them.
+TRUST_CHATGPT_HEADERS=false
+# Optional free credit for new accounts (USD).
+SIGNUP_BONUS_USD=0
+
+# Stripe Checkout. Webhook endpoint: POST /api/billing/webhook
+# Events: checkout.session.completed, checkout.session.async_payment_succeeded,
+#         checkout.session.async_payment_failed, checkout.session.expired, charge.refunded
+STRIPE_SECRET_KEY=
+STRIPE_WEBHOOK_SECRET=
+
+# Transactional email through Resend. Without it, emails are logged to the console in development.
+RESEND_API_KEY=
+EMAIL_FROM=
