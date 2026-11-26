@@ -7,7 +7,7 @@ const FOCUSABLE = 'a[href],button:not([disabled]),input:not([disabled]),select:n
  * Modal dialog: focus moves in on open and returns on close, Tab and Shift+Tab stay inside, Esc closes.
  * A click outside does not close it, so typed text is not lost by accident. Layout uses logical properties, so it works in RTL.
  */
-export default function Dialog({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
+export default function Dialog({ title, onClose, children }: { title: React.ReactNode; onClose: () => void; children: React.ReactNode }) {
   const box = useRef<HTMLDivElement>(null);
   const titleId = useId();
   const close = useRef(onClose);

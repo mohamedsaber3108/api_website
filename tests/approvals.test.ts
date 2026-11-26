@@ -379,7 +379,9 @@ describe('stale requests, expiry race, crash retry (fix round 1)', () => {
     const creditReq = (await (await askCredit(a.cookie, t.userId, 4)).json()).requestId as string;
     await setRole(s1.userId, 'admin');
     await setRole(a.userId, 'customer');
-    expect((await decide(s2.cookie, roleReq)).status).toBe(409);
+    const roleRes = await decide(s2.cookie, roleReq);
+    expect(roleRes.status).toBe(409);
+    expect((await roleRes.json()).code).toBe('request_stale');
     const res = await decide(b.cookie, creditReq);
     expect(res.status).toBe(409);
     expect((await res.json()).code).toBe('request_stale');
@@ -461,6 +463,60 @@ describe('stale requests, expiry race, crash retry (fix round 1)', () => {
     await decide(s2.cookie, id2);
     expect(await roleOf(t.userId)).toBe('admin');
     expect(await roleOf(t2.userId)).toBe('support');
+  });
+
+  it('re-apply limits (fix round 2): another approver never re-grants; the same approver only inside 15 minutes; credit stays once', async () => {
+    const s1 = await superAdmin();
+    const s2 = await superAdmin();
+    const s3 = await superAdmin();
+    const a = await admin();
+    const b = await admin();
+    const t = await makeUser();
+    // (a) approved and applied, target later set back, a different super admin approves again: no change, no audit row.
+    const id = await promote(s1, t.userId);
+    expect((await decide(s2.cookie, id)).status).toBe(200);
+    expect(await roleOf(t.userId)).toBe('admin');
+    await setRole(t.userId, 'customer');
+    expect(await (await decide(s3.cookie, id)).json()).toMatchObject({ status: 'approved', duplicate: true });
+    expect(await roleOf(t.userId)).toBe('customer');
+    // (b) crash: approved, nothing applied, same approver retries inside the window: applies once, one reapplied audit row.
+    const t2 = await makeUser();
+    const id2 = await promote(s1, t2.userId);
+    await getDb().update(adminRequests).set({ status: 'approved', decidedBy: s2.userId, decidedAt: Date.now() - 60_000 }).where(eq(adminRequests.id, id2));
+    expect(await (await decide(s2.cookie, id2)).json()).toMatchObject({ duplicate: true });
+    expect(await roleOf(t2.userId)).toBe('admin');
+    const reapplied = (await audits('admin.request_reapplied')).filter(x => x.targetId === t2.userId);
+    expect(reapplied).toEqual([expect.objectContaining({ actorId: s2.userId })]);
+    expect(JSON.parse(reapplied[0].meta as string)).toEqual({ requestId: id2, kind: 'role_change' });
+    // (c) same retry after the window: nothing applied.
+    const t3 = await makeUser();
+    const id3 = await promote(s1, t3.userId);
+    await getDb().update(adminRequests).set({ status: 'approved', decidedBy: s2.userId, decidedAt: Date.now() - 16 * 60_000 }).where(eq(adminRequests.id, id3));
+    expect(await (await decide(s2.cookie, id3)).json()).toMatchObject({ duplicate: true });
+    expect(await roleOf(t3.userId)).toBe('customer');
+    expect((await audits('admin.request_reapplied')).filter(x => x.targetId === t.userId || x.targetId === t3.userId)).toEqual([]);
+    // (d) credit: a retry inside the window is a no-op by the ledger key.
+    const t4 = await makeUser();
+    const cid = (await (await askCredit(a.cookie, t4.userId, 3)).json()).requestId as string;
+    expect((await decide(b.cookie, cid)).status).toBe(200);
+    await decide(b.cookie, cid);
+    expect(await getBalanceMicroUsd(t4.userId)).toBe(3_000_000);
+  });
+
+  it('quiet return: two parallel approvals of a stale request end as one stale rejection and one closed (no change)', async () => {
+    const s1 = await superAdmin();
+    const s2 = await superAdmin();
+    const s3 = await superAdmin();
+    const t = await makeUser();
+    const id = await promote(s1, t.userId);
+    await getDb().update(accounts).set({ status: 'suspended' }).where(eq(accounts.userId, s1.userId));
+    const results = await Promise.all([decide(s2.cookie, id), decide(s3.cookie, id)]);
+    const codes = (await Promise.all(results.map(r => r.json()))).map(j => j.code).sort();
+    expect(results.map(r => r.status)).toEqual([409, 409]);
+    expect(codes.every(c => c === 'request_stale' || c === 'request_closed')).toBe(true);
+    expect(codes).toContain('request_stale');
+    expect(await rowOf(id)).toMatchObject({ status: 'rejected', decisionReason: 'stale' });
+    expect(await roleOf(t.userId)).toBe('customer');
   });
 
   it('an admin who is admin only through ADMIN_EMAILS cannot be suspended by a plain admin', async () => {

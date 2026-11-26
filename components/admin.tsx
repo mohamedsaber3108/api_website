@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Activity, Cpu, FileClock, LayoutDashboard, LifeBuoy, ShieldCheck, Users } from 'lucide-react';
 import { api, ApiError, errorMessage, usd, type SessionInfo } from '../lib/client-api';
+import { approvalCodeMessage } from '../lib/admin-error';
 import Dialog from './dialog';
 import MfaPanel from './mfa';
 
@@ -61,11 +62,8 @@ function apiMsg(e: unknown, tr: P['tr']): string {
   if (e instanceof ApiError) {
     const d = e.data as { message_ar?: string; message_en?: string } | undefined;
     if (e.code === 'no_second_approver') return tr(d?.message_ar ?? 'لا يوجد مدير ثانٍ للموافقة.', d?.message_en ?? e.message);
-    if (e.code === 'super_admin_required') return tr('هذا الإجراء للمدير الأعلى فقط.', 'Only a super admin can do this.');
-    if (e.code === 'self_approval') return tr('لا يمكنك الموافقة على طلبك. يجب أن يوافق مدير آخر.', 'You cannot approve your own request. Another admin must approve it.');
-    if (e.code === 'self_target') return tr('لا يمكنك الموافقة على طلب يخص حسابك.', 'You cannot approve a request about your own account.');
-    if (e.code === 'request_expired') return tr('انتهت صلاحية الطلب (٢٤ ساعة). قدّم طلبًا جديدًا.', 'This request expired (24 hours). Make a new one.');
-    if (e.code === 'request_closed') return tr('تم البتّ في هذا الطلب من قبل.', 'This request was already decided.');
+    const known = approvalCodeMessage(e.code, tr);
+    if (known) return known;
   }
   return errorMessage(e);
 }
@@ -105,13 +103,13 @@ function UsersTab({ tr, fmt, onStepUp, isSuper }: P & { onStepUp: () => void; is
     <div className="rows">{users.map(u => <div key={u.id} className="row-wrap"><span><b>{u.name || u.email}</b><small>{u.email} · {u.provider} · {u.emailVerified ? '✓' : tr('غير مؤكد', 'unverified')} · {fmt(u.createdAt)} · {usd(u.balanceMicroUsd, 4)}</small></span>
       <span className="row-actions">
         <select aria-label={tr('الدور', 'Role')} value={u.role} disabled={u.status === 'deleted' || (!isSuper && isAdminLevel(u.role))} onChange={e => { const role = e.target.value; if (isAdminLevel(role)) setPromote({ id: u.id, email: u.email, role, reason: '', error: '' }); else patch(u.id, { role }); }}><option>customer</option><option>support</option>{(isSuper || u.role === 'admin') && <option>admin</option>}{(isSuper || u.role === 'super_admin') && <option>super_admin</option>}</select>
-        {u.status !== 'deleted' && <button className="pill-link" disabled={!isSuper && isAdminLevel(u.role)} onClick={() => { if (confirm(u.status === 'active' ? tr('إيقاف الحساب وإلغاء مفاتيحه؟', 'Suspend this account and revoke its keys?') : tr('إعادة التفعيل؟', 'Reactivate?'))) patch(u.id, { status: u.status === 'active' ? 'suspended' : 'active' }); }}>{u.status}</button>}
+        {u.status !== 'deleted' && <button className="pill-link" disabled={!isSuper && isAdminLevel(u.role)} onClick={() => { if (confirm(u.status === 'active' ? tr('إيقاف الحساب وإلغاء مفاتيحه؟', 'Suspend this account and revoke its keys?') : tr('إعادة التفعيل؟', 'Reactivate?'))) patch(u.id, { status: u.status === 'active' ? 'suspended' : 'active' }); }}>{u.status === 'active' ? tr('فعّال', 'Active') : u.status === 'suspended' ? tr('موقوف', 'Suspended') : u.status}</button>}
         <button className="pill-link" onClick={() => setCredit({ id: u.id, amount: '', note: '' })}>{tr('رصيد', 'Credit')}</button></span>
       {credit?.id === u.id && <form className="form-row" onSubmit={async e => { e.preventDefault(); try { await api(`/api/admin/users/${u.id}/credits`, { method: 'POST', body: { amountUsd: Number(credit.amount), note: credit.note, requestKey: crypto.randomUUID() } }); setCredit(null); setError(''); sent(); await load(); } catch (err) { if (err instanceof ApiError && (err.code === 'mfa_recent_required' || err.code === 'mfa_required')) onStepUp(); else setError(apiMsg(err, tr)); } }}>
         <input type="number" step="0.01" required aria-label={tr('المبلغ بالدولار (موجب أو سالب)', 'Amount in USD (+/-)')} placeholder="USD (+/-)" value={credit.amount} onChange={e => setCredit({ ...credit, amount: e.target.value })} /><input required minLength={3} aria-label={tr('السبب', 'Reason')} placeholder={tr('السبب', 'Reason')} value={credit.note} onChange={e => setCredit({ ...credit, note: e.target.value })} /><button className="button-dark">{tr('طلب موافقة', 'Request approval')}</button><button type="button" className="link" aria-label={tr('إغلاق', 'Close')} onClick={() => setCredit(null)}>×</button></form>}</div>)}</div>
-    {promote && <Dialog title={tr('طلب ترقية إلى ', 'Request promotion to ') + promote.role} onClose={() => setPromote(null)}>
+    {promote && <Dialog title={<>{tr('طلب ترقية إلى ', 'Request promotion to ')}<bdi>{promote.role}</bdi></>} onClose={() => setPromote(null)}>
       <form className="auth-form" onSubmit={async e => { e.preventDefault(); try { await api(`/api/admin/users/${promote.id}`, { method: 'PATCH', body: { role: promote.role, reason: promote.reason.trim(), requestKey: crypto.randomUUID() } }); setPromote(null); setError(''); sent(); } catch (err) { setPromote({ ...promote, error: apiMsg(err, tr) }); } }}>
-        <p>{promote.email}</p>
+        <p><bdi>{promote.email}</bdi></p>
         <label>{tr('سبب الترقية', 'Reason for the promotion')}<textarea required minLength={3} maxLength={200} value={promote.reason} onChange={e => setPromote({ ...promote, reason: e.target.value })} /></label>
         <p className="muted">{tr('لن تُطبَّق الترقية قبل موافقة مدير أعلى آخر.', 'The promotion is not applied until another super admin approves it.')}</p>
         {promote.error && <p className="live-error" role="alert">{promote.error}</p>}
@@ -131,7 +129,7 @@ function ApprovalsTab({ tr, fmt, me, isSuper }: P & { me: string; isSuper: boole
   const [busy, setBusy] = useState(false);
   const load = useCallback(() => api<{ requests: Req[] }>('/api/admin/requests').then(r => setItems(r.requests)).catch(e => setError(errorMessage(e))), []);
   useEffect(() => { load(); }, [load]);
-  const describe = (r: Req) => r.kind === 'credit_adjustment' ? tr(`رصيد ${usd((r.payload.amountUsd ?? 0) * 1e6)} إلى ${r.target.email}`, `Credit ${usd((r.payload.amountUsd ?? 0) * 1e6)} for ${r.target.email}`) : tr(`ترقية ${r.target.email} إلى ${r.payload.role}`, `Promote ${r.target.email} to ${r.payload.role}`);
+  const describe = (r: Req) => r.kind === 'credit_adjustment' ? <>{tr('رصيد ', 'Credit ')}<bdi>{usd((r.payload.amountUsd ?? 0) * 1e6)}</bdi>{tr(' إلى ', ' for ')}<bdi>{r.target.email}</bdi></> : <>{tr('ترقية ', 'Promote ')}<bdi>{r.target.email}</bdi>{tr(' إلى ', ' to ')}<bdi>{String(r.payload.role)}</bdi></>;
   const canApprove = (r: Req) => r.requestedBy.id !== me && r.target.id !== me && (r.kind === 'credit_adjustment' || isSuper);
   const close = () => { setOpen(null); setStepUp(false); setDialogError(''); };
   const submit = async (e: React.FormEvent) => {
@@ -146,7 +144,7 @@ function ApprovalsTab({ tr, fmt, me, isSuper }: P & { me: string; isSuper: boole
       close(); await load();
     } catch (err) {
       if (err instanceof ApiError && (err.code === 'mfa_recent_required' || err.code === 'mfa_required')) setStepUp(true);
-      else { setDialogError(apiMsg(err, tr)); if (err instanceof ApiError && ['request_expired', 'request_closed'].includes(err.code ?? '')) load(); }
+      else { setDialogError(apiMsg(err, tr)); if (err instanceof ApiError && ['request_expired', 'request_closed', 'request_stale'].includes(err.code ?? '')) load(); }
     } finally { setBusy(false); }
   };
   const title = open ? (open.action === 'approve' ? tr('الموافقة على الطلب', 'Approve request') : open.req.requestedBy.id === me ? tr('إلغاء طلبك', 'Cancel your request') : tr('رفض الطلب', 'Reject request')) : '';
@@ -154,7 +152,7 @@ function ApprovalsTab({ tr, fmt, me, isSuper }: P & { me: string; isSuper: boole
     <p className="muted">{tr('كل تعديل رصيد وكل ترقية لمدير يحتاج موافقة شخص آخر. تنتهي الطلبات بعد ٢٤ ساعة.', 'Every credit change and every promotion to admin needs a second person. Requests expire after 24 hours.')}</p>
     {error && <p className="live-error" role="alert">{error}</p>}
     {notice && <p className="notice-ok" role="status">{notice}</p>}
-    {items.length === 0 ? <p className="muted">—</p> : <div className="rows">{items.map(r => <div key={r.id} className="row-wrap"><span><b>{describe(r)}</b><small>{tr('طلب من', 'By')} {r.requestedBy.email} · {fmt(r.createdAt)} · {tr('ينتهي', 'expires')} {fmt(r.expiresAt)} · {r.reason}</small></span>
+    {items.length === 0 ? <p className="muted">—</p> : <div className="rows">{items.map(r => <div key={r.id} className="row-wrap"><span><b>{describe(r)}</b><small>{tr('طلب من', 'By')} <bdi>{r.requestedBy.email}</bdi> · {fmt(r.createdAt)} · {tr('ينتهي', 'expires')} {fmt(r.expiresAt)} · {r.reason}</small></span>
       <span className="row-actions">
         {canApprove(r) && <button className="pill-link" onClick={() => setOpen({ req: r, action: 'approve' })}>{tr('موافقة', 'Approve')}</button>}
         {(canApprove(r) || r.requestedBy.id === me || isSuper) && <button className="pill-link" onClick={() => setOpen({ req: r, action: 'reject' })}>{r.requestedBy.id === me ? tr('إلغاء الطلب', 'Cancel request') : tr('رفض', 'Reject')}</button>}
@@ -162,7 +160,7 @@ function ApprovalsTab({ tr, fmt, me, isSuper }: P & { me: string; isSuper: boole
     {open && <Dialog title={title} onClose={close}>
       {stepUp ? <MfaPanel tr={tr} reason={tr('للموافقة على تعديل رصيد أدخل رمزًا جديدًا (صالح ١٥ دقيقة). ما كتبته محفوظ.', 'To approve a credit change, enter a fresh code (valid for 15 minutes). What you typed is kept.')} onVerified={() => setStepUp(false)} />
       : <form className="auth-form" onSubmit={submit}>
-        <dl><dt>{describe(open.req)}</dt><dd>{tr('طلب من', 'Requested by')} {open.req.requestedBy.email}</dd><dd>{tr('السبب', 'Reason')}: {open.req.reason}</dd></dl>
+        <dl><dt>{describe(open.req)}</dt><dd>{tr('طلب من', 'Requested by')} <bdi>{open.req.requestedBy.email}</bdi></dd><dd>{tr('السبب', 'Reason')}: {open.req.reason}</dd></dl>
         <label>{tr('سببك', 'Your reason')}<textarea required minLength={3} maxLength={200} value={reasons[open.req.id] ?? ''} onChange={e => setReasons({ ...reasons, [open.req.id]: e.target.value })} /></label>
         {dialogError && <p className="live-error" role="alert">{dialogError}</p>}
         <div className="modal-actions"><button className="button-dark" disabled={busy}>{busy ? tr('جارٍ الإرسال…', 'Sending…') : open.action === 'approve' ? tr('موافقة', 'Approve') : open.req.requestedBy.id === me ? tr('إلغاء الطلب', 'Cancel request') : tr('رفض', 'Reject')}</button><button type="button" className="pill-link" onClick={close}>{tr('إغلاق', 'Close')}</button></div></form>}
