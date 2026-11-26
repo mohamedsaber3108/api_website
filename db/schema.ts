@@ -127,6 +127,24 @@ export const creditLedger = sqliteTable('credit_ledger', {
   index('ledger_user_time_idx').on(t.userId, t.createdAt),
 ]);
 
+/**
+ * Credit held for one in-flight gateway call (SEC-1). Open holds that have not expired count against
+ * the spendable balance. Rows are never deleted: status moves open -> settled | released.
+ */
+export const creditHolds = sqliteTable('credit_holds', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull().references(() => accounts.userId),
+  requestId: text('request_id').notNull(),
+  amountMicroUsd: integer('amount_micro_usd').notNull(),
+  /** open | settled | released */
+  status: text('status').notNull().default('open'),
+  createdAt: integer('created_at').notNull(),
+  expiresAt: integer('expires_at').notNull(),
+}, t => [
+  uniqueIndex('holds_request_uq').on(t.requestId),
+  index('holds_user_status_idx').on(t.userId, t.status, t.expiresAt),
+]);
+
 export const payments = sqliteTable('payments', {
   id: text('id').primaryKey(),
   userId: text('user_id').notNull().references(() => accounts.userId),

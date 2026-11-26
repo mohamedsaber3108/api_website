@@ -46,6 +46,19 @@ Without these, the related endpoints answer `503` and the UI shows "not activate
 - Legal pages (frontend): `/terms`, `/privacy`, `/refund`, `/acceptable-use`. These are drafts: replace `[COMPANY LEGAL NAME]`, `[legal@your-domain]` and `[JURISDICTION]` in `components/legal.tsx` and have a lawyer review them. If you change the text, bump `LEGAL_VERSION` there and `TERMS_VERSION` in `lib/server/config.ts` together.
 - Public / API-key: `/api/v1/models`, `/models/:id`, `/pricing/estimate`, `/health`, `/status`, `/chat/completions` (scope `chat`), `/balance` and `/usage` (scope `usage`), `/try` (BYOK)
 
+## Gateway charging (SEC-1, GW-1)
+
+Money rules for `POST /api/v1/chat/completions` and the playground (`lib/server/gateway.ts`, `lib/server/ledger.ts`, table `credit_holds`).
+
+1. **Hold first.** Before the provider is called, the gateway reserves the worst-case cost (estimated input plus `max_tokens` output, with markup). The hold is one conditional `INSERT` run inside a D1 batch: it is inserted only if `balance - open holds >= worst-case cost`. If not, the call gets `402 insufficient_credits` and the provider is never called. The message is in English and Arabic and links to `/dashboard` (prefixed with `PUBLIC_BASE_URL` when set).
+2. **Settle.** The real charge (ledger row `usage`, usage row) and the hold closing (`settled`) are written in the same batch. The charge never exceeds the hold, so the balance cannot go below zero. The provider cost stays on the usage row.
+3. **Release.** A failed call (provider error, timeout, bad reply) closes the hold as `released` and charges nothing.
+4. **Expiry.** A hold counts only while `status = open` and `expires_at > now`. Holds last 10 minutes (the upstream timeout is 5), so a crashed call frees its credit by itself. Hold rows are never deleted.
+5. **Stream cut (aborted).** If the client leaves or the provider connection drops, the usage row gets `status = aborted` and the call is charged: from the provider's `usage` (cost, else tokens) if the provider sent it before the cut; otherwise from the input estimate plus the output actually delivered (`characters / 3` tokens). In every case the charge is capped at the hold. An aborted call is never free: the input is always charged.
+6. **Rounding.** Charge = `ceil(provider cost x (1 + markup%))` in whole micro-USD, integer arithmetic only. A provider cost above 0 charges at least 1 micro-USD.
+
+Known limit: the provider may bill us for tokens it generated after the client left; the delivered-output estimate can be lower than that.
+
 ## Security notes
 
 - Sessions: random token in an HttpOnly SameSite=Lax cookie; only its SHA-256 is stored. Cookie-authenticated mutations require a same-origin `Origin` header.
