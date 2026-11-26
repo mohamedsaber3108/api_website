@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Creates a verified admin (or support) account directly on the server, without the website.
 # Prompts for the name and password (hidden). If the account already exists, it is promoted.
-#   sudo bash /opt/wasl/current/deploy/create-admin.sh you@example.com [admin|support]
+#   sudo bash /opt/wasl/current/deploy/create-admin.sh you@example.com [admin|super_admin|support]
 set -euo pipefail
-email=$(echo "${1:?usage: create-admin.sh email [admin|support]}" | tr '[:upper:]' '[:lower:]')
+email=$(echo "${1:?usage: create-admin.sh email [admin|super_admin|support]}" | tr '[:upper:]' '[:lower:]')
 role=${2:-admin}
 re='^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$'
 [[ "$email" =~ $re ]] || { echo "invalid email" >&2; exit 1; }
-[[ "$role" == "admin" || "$role" == "support" ]] || { echo "role must be admin or support" >&2; exit 1; }
+[[ "$role" == "admin" || "$role" == "super_admin" || "$role" == "support" ]] || { echo "role must be admin, super_admin or support" >&2; exit 1; }
 [[ $EUID -eq 0 ]] || { echo "Run with sudo." >&2; exit 1; }
 
 db=""

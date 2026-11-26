@@ -8,6 +8,7 @@ declare namespace Cloudflare {
     PUBLIC_BASE_URL?: string;
     /** Comma separated emails that become admins once their email is verified. */
     ADMIN_EMAILS?: string;
+    ADMIN_EMAILS_BREAKGLASS?: string;
     /** "true" turns on the paid inference gateway. */
     INFERENCE_ENABLED?: string;
     /** Secret. Upstream provider key used by the paid gateway. */

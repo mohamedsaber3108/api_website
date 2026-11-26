@@ -1,22 +1,25 @@
 'use client';
 import { useCallback, useEffect, useState } from 'react';
-import { Activity, Cpu, FileClock, LayoutDashboard, LifeBuoy, Users } from 'lucide-react';
+import { Activity, Cpu, FileClock, LayoutDashboard, LifeBuoy, ShieldCheck, Users } from 'lucide-react';
 import { api, ApiError, errorMessage, usd, type SessionInfo } from '../lib/client-api';
+import Dialog from './dialog';
 import MfaPanel from './mfa';
 
-type Tab = 'overview' | 'users' | 'tickets' | 'models' | 'incidents' | 'audit';
+type Tab = 'overview' | 'users' | 'approvals' | 'tickets' | 'models' | 'incidents' | 'audit';
 type Overview = { users: { total: number; last30Days: number }; activeKeys: number; openTickets: number; revenueLast30DaysMinor: number; usageLast30Days: { requests: number; billedMicroUsd: number; providerMicroUsd: number }; customerCreditsOutstandingMicroUsd: number; recentSignups: { id: string; email: string; name: string | null; createdAt: number }[] };
 type User = { id: string; email: string; name: string | null; role: string; status: string; provider: string; emailVerified: boolean; createdAt: number; lastLoginAt: number | null; balanceMicroUsd: number };
 type Ticket = { id: string; email: string; name: string; subject: string; status: string; priority: string; createdAt: number; updatedAt: number | null };
 type Msg = { id: string; authorRole: string; authorName: string; body: string; createdAt: number };
 type Incident = { id: string; title: string; body: string; status: string; severity: string; createdAt: number; resolvedAt: number | null };
 type AuditEvent = { id: string; actorId: string | null; action: string; targetType: string | null; targetId: string | null; ip: string | null; createdAt: number; meta: unknown };
+type Req = { id: string; kind: 'credit_adjustment' | 'role_change'; status: string; payload: { amountUsd?: number; note?: string; role?: string; from?: string }; reason: string; target: { id: string; email: string | null }; requestedBy: { id: string; email: string | null }; createdAt: number; expiresAt: number };
 type ModelCfg = { modelId: string; enabled: boolean; markupPercent: number | null; note: string | null; updatedAt: number };
 
 export default function AdminConsole({ lang, session }: { lang: 'ar' | 'en'; session: SessionInfo }) {
   const ar = lang === 'ar';
   const tr = (a: string, e: string) => (ar ? a : e);
-  const isAdmin = session.user?.role === 'admin';
+  const isSuper = session.user?.role === 'super_admin';
+  const isAdmin = session.user?.role === 'admin' || isSuper;
   const [tab, setTab] = useState<Tab>(isAdmin ? 'overview' : 'tickets');
   // Admins must pass MFA before any admin data loads; support staff are not required yet.
   const [mfa, setMfa] = useState<'checking' | 'ok' | 'need'>(isAdmin ? 'checking' : 'ok');
@@ -29,6 +32,7 @@ export default function AdminConsole({ lang, session }: { lang: 'ar' | 'en'; ses
   const tabs: { id: Tab; icon: typeof Users; label: string; admin: boolean }[] = [
     { id: 'overview', icon: LayoutDashboard, label: tr('نظرة عامة', 'Overview'), admin: false },
     { id: 'users', icon: Users, label: tr('المستخدمون', 'Users'), admin: true },
+    { id: 'approvals', icon: ShieldCheck, label: tr('الموافقات', 'Approvals'), admin: true },
     { id: 'tickets', icon: LifeBuoy, label: tr('التذاكر', 'Tickets'), admin: false },
     { id: 'models', icon: Cpu, label: tr('النماذج والتسعير', 'Models & pricing'), admin: true },
     { id: 'incidents', icon: Activity, label: tr('الحوادث', 'Incidents'), admin: false },
@@ -41,7 +45,8 @@ export default function AdminConsole({ lang, session }: { lang: 'ar' | 'en'; ses
     <section className="section dashboard-app"><aside className="dash-nav">{tabs.filter(t => isAdmin || !t.admin).map(t => <button key={t.id} className={tab === t.id ? 'dash-selected' : ''} onClick={() => setTab(t.id)}><t.icon size={18} />{t.label}</button>)}</aside>
       <div className="dash-body">
         {tab === 'overview' && <OverviewTab tr={tr} fmt={fmt} />}
-        {tab === 'users' && <UsersTab tr={tr} fmt={fmt} onStepUp={stepUp} />}
+        {tab === 'users' && <UsersTab tr={tr} fmt={fmt} onStepUp={stepUp} isSuper={isSuper} />}
+        {tab === 'approvals' && <ApprovalsTab tr={tr} fmt={fmt} me={session.user?.id ?? ''} isSuper={isSuper} />}
         {tab === 'tickets' && <TicketsTab tr={tr} fmt={fmt} />}
         {tab === 'models' && <ModelsTab tr={tr} fmt={fmt} />}
         {tab === 'incidents' && <IncidentsTab tr={tr} fmt={fmt} canEdit={isAdmin} />}
@@ -50,6 +55,20 @@ export default function AdminConsole({ lang, session }: { lang: 'ar' | 'en'; ses
 }
 
 type P = { tr: (a: string, e: string) => string; fmt: (t: number) => string };
+
+/** Arabic and English text for the approval error codes. Unknown errors show the server message. */
+function apiMsg(e: unknown, tr: P['tr']): string {
+  if (e instanceof ApiError) {
+    const d = e.data as { message_ar?: string; message_en?: string } | undefined;
+    if (e.code === 'no_second_approver') return tr(d?.message_ar ?? 'لا يوجد مدير ثانٍ للموافقة.', d?.message_en ?? e.message);
+    if (e.code === 'super_admin_required') return tr('هذا الإجراء للمدير الأعلى فقط.', 'Only a super admin can do this.');
+    if (e.code === 'self_approval') return tr('لا يمكنك الموافقة على طلبك. يجب أن يوافق مدير آخر.', 'You cannot approve your own request. Another admin must approve it.');
+    if (e.code === 'self_target') return tr('لا يمكنك الموافقة على طلب يخص حسابك.', 'You cannot approve a request about your own account.');
+    if (e.code === 'request_expired') return tr('انتهت صلاحية الطلب (٢٤ ساعة). قدّم طلبًا جديدًا.', 'This request expired (24 hours). Make a new one.');
+    if (e.code === 'request_closed') return tr('تم البتّ في هذا الطلب من قبل.', 'This request was already decided.');
+  }
+  return errorMessage(e);
+}
 
 function OverviewTab({ tr, fmt }: P) {
   const [o, setO] = useState<Overview | null>(null);
@@ -68,23 +87,87 @@ function OverviewTab({ tr, fmt }: P) {
   </div><div className="dash-panel"><h3>{tr('أحدث التسجيلات', 'Recent sign-ups')}</h3><div className="rows">{o.recentSignups.map(u => <div key={u.id}><span><b>{u.name || u.email}</b><small>{u.email} · {fmt(u.createdAt)}</small></span></div>)}</div></div></>;
 }
 
-function UsersTab({ tr, fmt, onStepUp }: P & { onStepUp: () => void }) {
+function UsersTab({ tr, fmt, onStepUp, isSuper }: P & { onStepUp: () => void; isSuper: boolean }) {
   const [q, setQ] = useState('');
   const [users, setUsers] = useState<User[]>([]);
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const [credit, setCredit] = useState<{ id: string; amount: string; note: string } | null>(null);
+  const [promote, setPromote] = useState<{ id: string; email: string; role: string; reason: string; error: string } | null>(null);
   const load = useCallback(() => api<{ users: User[] }>(`/api/admin/users?q=${encodeURIComponent(q)}`).then(r => setUsers(r.users)).catch(e => setError(errorMessage(e))), [q]);
   useEffect(() => { load(); }, [load]);
-  const patch = async (id: string, body: object) => { try { await api(`/api/admin/users/${id}`, { method: 'PATCH', body }); await load(); } catch (e) { setError(errorMessage(e)); } };
-  return <div className="dash-panel"><div className="panel-head"><h3>{tr('المستخدمون', 'Users')}</h3><input placeholder={tr('بحث بالبريد أو الاسم', 'Search email or name')} value={q} onChange={e => setQ(e.target.value)} /></div>
-    {error && <p className="live-error">{error}</p>}
+  const sent = () => setNotice(tr('أُرسل الطلب. يجب أن يوافق عليه مدير آخر خلال ٢٤ ساعة. تجده في تبويب الموافقات.', 'Request sent. Another admin must approve it within 24 hours. See the Approvals tab.'));
+  const patch = async (id: string, body: object) => { try { await api(`/api/admin/users/${id}`, { method: 'PATCH', body }); await load(); } catch (e) { setError(apiMsg(e, tr)); } };
+  const isAdminLevel = (r: string) => r === 'admin' || r === 'super_admin';
+  return <div className="dash-panel"><div className="panel-head"><h3>{tr('المستخدمون', 'Users')}</h3><input aria-label={tr('بحث بالبريد أو الاسم', 'Search email or name')} placeholder={tr('بحث بالبريد أو الاسم', 'Search email or name')} value={q} onChange={e => setQ(e.target.value)} /></div>
+    {error && <p className="live-error" role="alert">{error}</p>}
+    {notice && <p className="notice-ok" role="status">{notice}</p>}
     <div className="rows">{users.map(u => <div key={u.id} className="row-wrap"><span><b>{u.name || u.email}</b><small>{u.email} · {u.provider} · {u.emailVerified ? '✓' : tr('غير مؤكد', 'unverified')} · {fmt(u.createdAt)} · {usd(u.balanceMicroUsd, 4)}</small></span>
       <span className="row-actions">
-        <select aria-label="role" value={u.role} disabled={u.status === 'deleted'} onChange={e => patch(u.id, { role: e.target.value })}><option>customer</option><option>support</option><option>admin</option></select>
-        {u.status !== 'deleted' && <button className="pill-link" onClick={() => { if (confirm(u.status === 'active' ? tr('إيقاف الحساب وإلغاء مفاتيحه؟', 'Suspend this account and revoke its keys?') : tr('إعادة التفعيل؟', 'Reactivate?'))) patch(u.id, { status: u.status === 'active' ? 'suspended' : 'active' }); }}>{u.status}</button>}
+        <select aria-label={tr('الدور', 'Role')} value={u.role} disabled={u.status === 'deleted' || (!isSuper && isAdminLevel(u.role))} onChange={e => { const role = e.target.value; if (isAdminLevel(role)) setPromote({ id: u.id, email: u.email, role, reason: '', error: '' }); else patch(u.id, { role }); }}><option>customer</option><option>support</option>{(isSuper || u.role === 'admin') && <option>admin</option>}{(isSuper || u.role === 'super_admin') && <option>super_admin</option>}</select>
+        {u.status !== 'deleted' && <button className="pill-link" disabled={!isSuper && isAdminLevel(u.role)} onClick={() => { if (confirm(u.status === 'active' ? tr('إيقاف الحساب وإلغاء مفاتيحه؟', 'Suspend this account and revoke its keys?') : tr('إعادة التفعيل؟', 'Reactivate?'))) patch(u.id, { status: u.status === 'active' ? 'suspended' : 'active' }); }}>{u.status}</button>}
         <button className="pill-link" onClick={() => setCredit({ id: u.id, amount: '', note: '' })}>{tr('رصيد', 'Credit')}</button></span>
-      {credit?.id === u.id && <form className="form-row" onSubmit={async e => { e.preventDefault(); try { await api(`/api/admin/users/${u.id}/credits`, { method: 'POST', body: { amountUsd: Number(credit.amount), note: credit.note, requestKey: crypto.randomUUID() } }); setCredit(null); await load(); } catch (err) { if (err instanceof ApiError && (err.code === 'mfa_recent_required' || err.code === 'mfa_required')) onStepUp(); else setError(errorMessage(err)); } }}>
-        <input type="number" step="0.01" required placeholder="USD (+/-)" value={credit.amount} onChange={e => setCredit({ ...credit, amount: e.target.value })} /><input required minLength={3} placeholder={tr('السبب', 'Reason')} value={credit.note} onChange={e => setCredit({ ...credit, note: e.target.value })} /><button className="button-dark">{tr('تطبيق', 'Apply')}</button><button type="button" className="link" onClick={() => setCredit(null)}>×</button></form>}</div>)}</div></div>;
+      {credit?.id === u.id && <form className="form-row" onSubmit={async e => { e.preventDefault(); try { await api(`/api/admin/users/${u.id}/credits`, { method: 'POST', body: { amountUsd: Number(credit.amount), note: credit.note, requestKey: crypto.randomUUID() } }); setCredit(null); setError(''); sent(); await load(); } catch (err) { if (err instanceof ApiError && (err.code === 'mfa_recent_required' || err.code === 'mfa_required')) onStepUp(); else setError(apiMsg(err, tr)); } }}>
+        <input type="number" step="0.01" required aria-label={tr('المبلغ بالدولار (موجب أو سالب)', 'Amount in USD (+/-)')} placeholder="USD (+/-)" value={credit.amount} onChange={e => setCredit({ ...credit, amount: e.target.value })} /><input required minLength={3} aria-label={tr('السبب', 'Reason')} placeholder={tr('السبب', 'Reason')} value={credit.note} onChange={e => setCredit({ ...credit, note: e.target.value })} /><button className="button-dark">{tr('طلب موافقة', 'Request approval')}</button><button type="button" className="link" aria-label={tr('إغلاق', 'Close')} onClick={() => setCredit(null)}>×</button></form>}</div>)}</div>
+    {promote && <Dialog title={tr('طلب ترقية إلى ', 'Request promotion to ') + promote.role} onClose={() => setPromote(null)}>
+      <form className="auth-form" onSubmit={async e => { e.preventDefault(); try { await api(`/api/admin/users/${promote.id}`, { method: 'PATCH', body: { role: promote.role, reason: promote.reason.trim(), requestKey: crypto.randomUUID() } }); setPromote(null); setError(''); sent(); } catch (err) { setPromote({ ...promote, error: apiMsg(err, tr) }); } }}>
+        <p>{promote.email}</p>
+        <label>{tr('سبب الترقية', 'Reason for the promotion')}<textarea required minLength={3} maxLength={200} value={promote.reason} onChange={e => setPromote({ ...promote, reason: e.target.value })} /></label>
+        <p className="muted">{tr('لن تُطبَّق الترقية قبل موافقة مدير أعلى آخر.', 'The promotion is not applied until another super admin approves it.')}</p>
+        {promote.error && <p className="live-error" role="alert">{promote.error}</p>}
+        <div className="modal-actions"><button className="button-dark">{tr('إرسال الطلب', 'Send request')}</button><button type="button" className="pill-link" onClick={() => setPromote(null)}>{tr('إلغاء', 'Cancel')}</button></div></form></Dialog>}
+  </div>;
+}
+
+function ApprovalsTab({ tr, fmt, me, isSuper }: P & { me: string; isSuper: boolean }) {
+  const [items, setItems] = useState<Req[]>([]);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+  const [open, setOpen] = useState<{ req: Req; action: 'approve' | 'reject' } | null>(null);
+  // Typed reasons live here, not in the dialog, so a step-up (or closing with Esc) does not lose them (WCAG 3.3.7).
+  const [reasons, setReasons] = useState<Record<string, string>>({});
+  const [stepUp, setStepUp] = useState(false);
+  const [dialogError, setDialogError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const load = useCallback(() => api<{ requests: Req[] }>('/api/admin/requests').then(r => setItems(r.requests)).catch(e => setError(errorMessage(e))), []);
+  useEffect(() => { load(); }, [load]);
+  const describe = (r: Req) => r.kind === 'credit_adjustment' ? tr(`رصيد ${usd((r.payload.amountUsd ?? 0) * 1e6)} إلى ${r.target.email}`, `Credit ${usd((r.payload.amountUsd ?? 0) * 1e6)} for ${r.target.email}`) : tr(`ترقية ${r.target.email} إلى ${r.payload.role}`, `Promote ${r.target.email} to ${r.payload.role}`);
+  const canApprove = (r: Req) => r.requestedBy.id !== me && r.target.id !== me && (r.kind === 'credit_adjustment' || isSuper);
+  const close = () => { setOpen(null); setStepUp(false); setDialogError(''); };
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!open) return;
+    setBusy(true); setDialogError('');
+    try {
+      await api(`/api/admin/requests/${open.req.id}`, { method: 'POST', body: { action: open.action, reason: (reasons[open.req.id] ?? '').trim() } });
+      const doneId = open.req.id;
+      setReasons(old => Object.fromEntries(Object.entries(old).filter(([k]) => k !== doneId)));
+      setNotice(open.action === 'approve' ? tr('تمت الموافقة وطُبّق التغيير.', 'Approved. The change was applied.') : tr('تم إنهاء الطلب.', 'The request was closed.'));
+      close(); await load();
+    } catch (err) {
+      if (err instanceof ApiError && (err.code === 'mfa_recent_required' || err.code === 'mfa_required')) setStepUp(true);
+      else { setDialogError(apiMsg(err, tr)); if (err instanceof ApiError && ['request_expired', 'request_closed'].includes(err.code ?? '')) load(); }
+    } finally { setBusy(false); }
+  };
+  const title = open ? (open.action === 'approve' ? tr('الموافقة على الطلب', 'Approve request') : open.req.requestedBy.id === me ? tr('إلغاء طلبك', 'Cancel your request') : tr('رفض الطلب', 'Reject request')) : '';
+  return <div className="dash-panel"><h3>{tr('طلبات تنتظر موافقة', 'Requests waiting for approval')}</h3>
+    <p className="muted">{tr('كل تعديل رصيد وكل ترقية لمدير يحتاج موافقة شخص آخر. تنتهي الطلبات بعد ٢٤ ساعة.', 'Every credit change and every promotion to admin needs a second person. Requests expire after 24 hours.')}</p>
+    {error && <p className="live-error" role="alert">{error}</p>}
+    {notice && <p className="notice-ok" role="status">{notice}</p>}
+    {items.length === 0 ? <p className="muted">—</p> : <div className="rows">{items.map(r => <div key={r.id} className="row-wrap"><span><b>{describe(r)}</b><small>{tr('طلب من', 'By')} {r.requestedBy.email} · {fmt(r.createdAt)} · {tr('ينتهي', 'expires')} {fmt(r.expiresAt)} · {r.reason}</small></span>
+      <span className="row-actions">
+        {canApprove(r) && <button className="pill-link" onClick={() => setOpen({ req: r, action: 'approve' })}>{tr('موافقة', 'Approve')}</button>}
+        {(canApprove(r) || r.requestedBy.id === me || isSuper) && <button className="pill-link" onClick={() => setOpen({ req: r, action: 'reject' })}>{r.requestedBy.id === me ? tr('إلغاء الطلب', 'Cancel request') : tr('رفض', 'Reject')}</button>}
+      </span></div>)}</div>}
+    {open && <Dialog title={title} onClose={close}>
+      {stepUp ? <MfaPanel tr={tr} reason={tr('للموافقة على تعديل رصيد أدخل رمزًا جديدًا (صالح ١٥ دقيقة). ما كتبته محفوظ.', 'To approve a credit change, enter a fresh code (valid for 15 minutes). What you typed is kept.')} onVerified={() => setStepUp(false)} />
+      : <form className="auth-form" onSubmit={submit}>
+        <dl><dt>{describe(open.req)}</dt><dd>{tr('طلب من', 'Requested by')} {open.req.requestedBy.email}</dd><dd>{tr('السبب', 'Reason')}: {open.req.reason}</dd></dl>
+        <label>{tr('سببك', 'Your reason')}<textarea required minLength={3} maxLength={200} value={reasons[open.req.id] ?? ''} onChange={e => setReasons({ ...reasons, [open.req.id]: e.target.value })} /></label>
+        {dialogError && <p className="live-error" role="alert">{dialogError}</p>}
+        <div className="modal-actions"><button className="button-dark" disabled={busy}>{busy ? tr('جارٍ الإرسال…', 'Sending…') : open.action === 'approve' ? tr('موافقة', 'Approve') : open.req.requestedBy.id === me ? tr('إلغاء الطلب', 'Cancel request') : tr('رفض', 'Reject')}</button><button type="button" className="pill-link" onClick={close}>{tr('إغلاق', 'Close')}</button></div></form>}
+    </Dialog>}
+  </div>;
 }
 
 function TicketsTab({ tr, fmt }: P) {

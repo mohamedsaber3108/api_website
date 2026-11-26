@@ -46,7 +46,7 @@ export default function Dashboard({ lang, session, refreshSession, go }: { lang:
   return <section className="section dashboard-app"><aside className="dash-nav">
     <div className="dash-user"><strong>{user.name}</strong><small>{user.email}</small>{user.role !== 'customer' && <span className="role-pill">{user.role}</span>}</div>
     {TABS.map(t => <button key={t.id} className={tab === t.id ? 'dash-selected' : ''} onClick={() => { setTab(t.id); setNotice(''); }}><t.icon size={18} />{tr(t.ar, t.en)}</button>)}
-    {(user.role === 'admin' || user.role === 'support') && <button onClick={() => go('admin')}><LockKeyhole size={18} />{tr('لوحة الإدارة', 'Admin console')}</button>}
+    {(user.role === 'admin' || user.role === 'super_admin' || user.role === 'support') && <button onClick={() => go('admin')}><LockKeyhole size={18} />{tr('لوحة الإدارة', 'Admin console')}</button>}
   </aside><div className="dash-body">
     {!user.emailVerified && <VerifyBanner ar={ar} />}
     {error && <p className="live-error" role="alert">{error}</p>}{notice && <p className="auth-info">{notice}</p>}
