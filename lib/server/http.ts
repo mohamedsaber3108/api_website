@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { env } from 'cloudflare:workers';
+import { errText } from './redact';
 
 const NO_STORE = { 'Cache-Control': 'private, no-store' };
 
@@ -27,7 +28,7 @@ export function handle<P = Record<string, string>>(fn: (request: Request, ctx: C
       return await fn(request, ctx);
     } catch (e) {
       if (e instanceof HttpError) return fail(e.status, e.message, e.code, e.extra, e.headers);
-      console.error('Unhandled route error', e instanceof Error ? `${e.name}: ${e.message}` : e);
+      console.error('Unhandled route error', errText(e));
       return fail(500, 'Internal server error', 'internal_error');
     } finally {
       await discardBody(request);
