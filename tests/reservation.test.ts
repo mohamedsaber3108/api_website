@@ -3,7 +3,7 @@ import { env } from 'cloudflare:workers';
 import { eq } from 'drizzle-orm';
 import { getDb } from '../db';
 import { creditHolds, creditLedger, usageEvents } from '../db/schema';
-import { newChatContext, parseChatRequest, runChat } from '../lib/server/gateway';
+import { gatewayErrorResponse, newChatContext, parseChatRequest, runChat } from '../lib/server/gateway';
 import { addLedgerEntry, getAvailableMicroUsd, getBalanceMicroUsd } from '../lib/server/ledger';
 import { makeUser, startDb } from './helpers/db';
 
@@ -187,7 +187,12 @@ describe('SEC-1: reserve credit before the provider call', () => {
     expect(err).toMatchObject({ status: 402, code: 'insufficient_credits' });
     expect(err.message).toContain('Your balance is too low');
     expect(err.message).toContain('رصيدك غير كافٍ');
-    expect(err.message.match(/https:\/\/wasl\.example\/dashboard/g)).toHaveLength(2);
+    expect(err.message.match(/https:\/\/wasl\.example\/dashboard/g)).toHaveLength(1);
+    expect(err.extra.need_micro_usd).toBeGreaterThan(err.extra.available_micro_usd);
+    expect(err.extra.available_micro_usd).toBe(10);
+    expect(gatewayErrorResponse(err).status).toBe(402);
+    const body = (await gatewayErrorResponse(err).json()).error;
+    expect(body).toMatchObject({ code: 'insufficient_credits', need_micro_usd: err.extra.need_micro_usd, available_micro_usd: 10 });
     expect(fetchSpy.mock.calls.some(c => isChat(c[0]))).toBe(false);
   });
 

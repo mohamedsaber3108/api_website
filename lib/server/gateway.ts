@@ -11,7 +11,7 @@ import { rateLimit } from './ratelimit';
 import { HttpError } from './http';
 
 export class GatewayError extends Error {
-  constructor(public status: number, public code: string, message: string, public headers: Record<string, string> = {}) {
+  constructor(public status: number, public code: string, message: string, public headers: Record<string, string> = {}, public extra: Record<string, number> = {}) {
     super(message);
   }
 }
@@ -27,7 +27,7 @@ export function gatewayErrorResponse(e: unknown): Response {
     console.error('Gateway failure', e instanceof Error ? `${e.name}: ${e.message}` : e);
     return Response.json({ error: { message: 'Internal server error', type: 'server_error', code: 'internal_error' } }, { status: 500, headers: { 'Cache-Control': 'no-store' } });
   }
-  return Response.json({ error: { message: g.message, type: g.status >= 500 ? 'server_error' : 'invalid_request_error', code: g.code } }, { status: g.status, headers: { 'Cache-Control': 'no-store', ...g.headers } });
+  return Response.json({ error: { message: g.message, type: g.status >= 500 ? 'server_error' : 'invalid_request_error', code: g.code, ...g.extra } }, { status: g.status, headers: { 'Cache-Control': 'no-store', ...g.headers } });
 }
 
 export type ApiKeyAuth = { userId: string; keyId: string; scopes: string[]; rateLimitPerMin: number };
@@ -105,7 +105,7 @@ function insufficientCreditsMessage(needMicro: number, availableMicro: number): 
   const need = `$${(needMicro / 1e6).toFixed(4)}`;
   const have = `$${(Math.max(availableMicro, 0) / 1e6).toFixed(4)}`;
   const link = addCreditLink();
-  return `Your balance is too low for this request (it can cost up to ${need}; available ${have}). Add credit: ${link} | رصيدك غير كافٍ لهذا الطلب (قد تصل تكلفته إلى ${need}، والمتاح ${have}). أضف رصيداً: ${link}`;
+  return `Your balance is too low for this request (it can cost up to ${need}; available ${have}). | رصيدك غير كافٍ لهذا الطلب (قد تصل تكلفته إلى ${need}، والمتاح ${have}). Add credit / أضف رصيداً: ${link}`;
 }
 
 async function resolveBilling(modelId: string): Promise<Billing> {
@@ -187,7 +187,8 @@ export async function runChat(ctx: ChatContext, body: ChatRequest, signal?: Abor
   // SEC-1: reserve the worst-case cost first. The check and the insert are one statement, so parallel calls cannot overspend.
   const holdMicro = maxCost > 0 ? maxCost : null;
   if (holdMicro !== null && !(await reserveCredit(ctx.userId, ctx.requestId, holdMicro))) {
-    throw new GatewayError(402, 'insufficient_credits', insufficientCreditsMessage(maxCost, await getAvailableMicroUsd(ctx.userId)));
+    const available = await getAvailableMicroUsd(ctx.userId);
+    throw new GatewayError(402, 'insufficient_credits', insufficientCreditsMessage(maxCost, available), {}, { need_micro_usd: maxCost, available_micro_usd: Math.max(available, 0) });
   }
 
   const upstreamBody: Record<string, unknown> = { ...body, max_tokens: maxOut, usage: { include: true } };
