@@ -239,6 +239,19 @@ describe('fix round 1 (review of PR 7)', () => {
     expect(await mine(customer.userId)).toHaveLength(3);
   });
 
+  it('N1: 20 refused calls to /api/admin/users/<different ids> write one denied row; another pattern or actor still writes', async () => {
+    const customer = await makeUser();
+    const other = await makeUser();
+    const hit = async (cookie: string, url: string, id: string) => (await call(userById.PATCH, req(url, { method: 'PATCH', cookie, body: { role: 'admin', reason: 'x' } }), id)).status;
+    for (let i = 0; i < 20; i++) expect(await hit(customer.cookie, `/api/admin/users/id-${i}`, `id-${i}`)).toBe(403);
+    const mine = async (id: string) => (await byAction('auth.admin_denied')).filter(r => r.actorId === id);
+    expect(await mine(customer.userId)).toEqual([expect.objectContaining({ targetId: '/api/admin/users/:id' })]);
+    expect((await call(credits.POST, req('/api/admin/users/abc/credits', { method: 'POST', cookie: customer.cookie, body: {} }), 'abc')).status).toBe(403); // other pattern
+    expect(await mine(customer.userId)).toHaveLength(2);
+    expect(await hit(other.cookie, '/api/admin/users/zzz', 'zzz')).toBe(403); // other actor
+    expect(await mine(other.userId)).toHaveLength(1);
+  });
+
   it('R2: a duplicate approval writes its audit rows before it re-applies, and applies nothing when they cannot be written', async () => {
     const s = await makeUser({ role: 'super_admin' });
     const s2 = await makeUser({ role: 'super_admin' });

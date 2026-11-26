@@ -129,7 +129,8 @@ export async function requireUser(request: Request): Promise<Principal> {
 export async function requireRole(request: Request, ...roles: Role[]): Promise<Principal> {
   const p = await requireUser(request);
   // super_admin passes wherever `admin` is allowed.
-  const path = new URL(request.url).pathname;
+  // Audit target = route pattern, not the raw path: a new id in the URL must not make a new throttle key (review N1).
+  const path = new URL(request.url).pathname.replace(/^(\/api\/admin\/(?:users|requests|tickets))\/[^/]+/, '$1/:id').slice(0, 120);
   if (!roles.includes(p.role) && !(p.role === 'super_admin' && roles.includes('admin'))) {
     // A signed-in person tried an admin or staff route they may not use. (Not signed in = 401, not written: no actor to record.)
     // One row per actor, route and reason per 60 seconds, so a customer hammering an admin URL cannot flood the log.

@@ -22,7 +22,7 @@ Everything else (login, tickets, incidents, keys) keeps the old behaviour: a fai
 ## Denied attempts
 `auth.admin_denied` (signed-in user without the role, or an admin without MFA), `admin.request_denied` (self-approval, own account, wrong role, stale MFA), `admin.user_update_denied`, `admin.request_rejected` with reason `stale`, `auth.mfa_verify_failed` and `auth.mfa_locked` (result `denied`).
 
-`auth.admin_denied` is written at most once per actor, route and reason in 60 seconds, so looping on an admin URL cannot flood the log. The skipped attempts are not counted.
+`auth.admin_denied` is written at most once per actor, route pattern and reason in 60 seconds (the id in `/api/admin/users/<id>` is stored as `:id`, so changing the id does not make a new row), so looping on an admin URL cannot flood the log. The skipped attempts are not counted.
 
 ## Verify
 Run on a COPY of the database file, never the live one:
