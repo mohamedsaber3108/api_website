@@ -11,7 +11,7 @@ type User = { id: string; email: string; name: string | null; role: string; stat
 type Ticket = { id: string; email: string; name: string; subject: string; status: string; priority: string; createdAt: number; updatedAt: number | null };
 type Msg = { id: string; authorRole: string; authorName: string; body: string; createdAt: number };
 type Incident = { id: string; title: string; body: string; status: string; severity: string; createdAt: number; resolvedAt: number | null };
-type AuditEvent = { id: string; actorId: string | null; action: string; targetType: string | null; targetId: string | null; ip: string | null; createdAt: number; meta: unknown };
+type AuditEvent = { id: string; seq: number | null; actorId: string | null; actorEmail: string | null; actorRole: string | null; action: string; targetType: string | null; targetId: string | null; ip: string | null; createdAt: number; meta: unknown; before: unknown; after: unknown; reason: string | null; result: 'success' | 'denied' | 'failed' | null };
 type Req = { id: string; kind: 'credit_adjustment' | 'role_change'; status: string; payload: { amountUsd?: number; note?: string; role?: string; from?: string }; reason: string; target: { id: string; email: string | null }; requestedBy: { id: string; email: string | null }; createdAt: number; expiresAt: number };
 type ModelCfg = { modelId: string; enabled: boolean; markupPercent: number | null; note: string | null; updatedAt: number };
 
@@ -50,7 +50,7 @@ export default function AdminConsole({ lang, session }: { lang: 'ar' | 'en'; ses
         {tab === 'tickets' && <TicketsTab tr={tr} fmt={fmt} />}
         {tab === 'models' && <ModelsTab tr={tr} fmt={fmt} />}
         {tab === 'incidents' && <IncidentsTab tr={tr} fmt={fmt} canEdit={isAdmin} />}
-        {tab === 'audit' && <AuditTab fmt={fmt} />}
+        {tab === 'audit' && <AuditTab tr={tr} fmt={fmt} />}
       </div></section></main>;
 }
 
@@ -214,9 +214,42 @@ function IncidentsTab({ tr, fmt, canEdit }: P & { canEdit: boolean }) {
     <div className="rows">{items.map(i => <div key={i.id}><span><b>{i.title}</b><small>{i.severity} · {fmt(i.createdAt)} · {i.body}</small></span>{canEdit ? <select value={i.status} onChange={async e => { try { await api('/api/admin/incidents', { method: 'PATCH', body: { id: i.id, status: e.target.value } }); await load(); } catch (err) { setError(errorMessage(err)); } }}>{['investigating', 'identified', 'monitoring', 'resolved'].map(s => <option key={s}>{s}</option>)}</select> : <span className="role-pill">{i.status}</span>}</div>)}</div></div>;
 }
 
-function AuditTab({ fmt }: { fmt: (t: number) => string }) {
+function AuditTab({ tr, fmt }: P) {
+  const empty = { actor: '', action: '', target: '', result: '', from: '', to: '' };
+  const [form, setForm] = useState(empty);
   const [events, setEvents] = useState<AuditEvent[]>([]);
   const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const resultText = (r: AuditEvent['result']) => (r === 'denied' ? tr('مرفوض', 'Denied') : r === 'failed' ? tr('فشل', 'Failed') : r === 'success' ? tr('نجح', 'Success') : tr('قديم', 'Legacy'));
+  const load = useCallback(async (f: typeof empty) => {
+    const qs = new URLSearchParams({ limit: '100' });
+    for (const k of ['actor', 'action', 'target', 'result'] as const) if (f[k].trim()) qs.set(k, f[k].trim());
+    // Dates are the viewer's local days: from 00:00 to 23:59:59.999 of the chosen days.
+    if (f.from) qs.set('from', String(new Date(`${f.from}T00:00:00`).getTime()));
+    if (f.to) qs.set('to', String(new Date(`${f.to}T23:59:59.999`).getTime()));
+    setBusy(true);
+    try { setEvents((await api<{ events: AuditEvent[] }>(`/api/admin/audit?${qs}`)).events); setError(''); } catch (e) { setError(errorMessage(e)); } finally { setBusy(false); }
+  }, []);
   useEffect(() => { api<{ events: AuditEvent[] }>('/api/admin/audit?limit=100').then(r => setEvents(r.events)).catch(e => setError(errorMessage(e))); }, []);
-  return <div className="dash-panel"><h3>Audit log</h3>{error && <p className="live-error">{error}</p>}<div className="rows">{events.map(e => <div key={e.id}><span><b>{e.action}</b><small>{fmt(e.createdAt)} · {e.actorId ?? '—'} → {e.targetType}:{e.targetId} · {e.ip}</small></span></div>)}</div></div>;
+  const field = (id: string, label: string, el: React.ReactNode) => <label htmlFor={id} style={{ display: 'grid', gap: 4 }}>{label}{el}</label>;
+  const set = (k: keyof typeof empty) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setForm({ ...form, [k]: e.target.value });
+  return <div className="dash-panel"><h3>{tr('سجل التدقيق', 'Audit log')}</h3>
+    <form className="auth-form" role="search" aria-label={tr('تصفية سجل التدقيق', 'Filter the audit log')} onSubmit={e => { e.preventDefault(); load(form); }}>
+      {field('au-actor', tr('المنفِّذ (المعرّف أو البريد)', 'Actor (id or e-mail)'), <input id="au-actor" value={form.actor} onChange={set('actor')} maxLength={120} />)}
+      {field('au-action', tr('الإجراء (جزء من الاسم)', 'Action (part of the name)'), <input id="au-action" value={form.action} onChange={set('action')} maxLength={120} />)}
+      {field('au-target', tr('الهدف (المعرّف أو النوع)', 'Target (id or type)'), <input id="au-target" value={form.target} onChange={set('target')} maxLength={120} />)}
+      {field('au-result', tr('النتيجة', 'Result'), <select id="au-result" value={form.result} onChange={set('result')}><option value="">{tr('الكل', 'All')}</option><option value="success">{tr('نجح', 'Success')}</option><option value="denied">{tr('مرفوض', 'Denied')}</option><option value="failed">{tr('فشل', 'Failed')}</option></select>)}
+      {field('au-from', tr('من تاريخ', 'From date'), <input id="au-from" type="date" value={form.from} onChange={set('from')} />)}
+      {field('au-to', tr('إلى تاريخ', 'To date'), <input id="au-to" type="date" value={form.to} onChange={set('to')} />)}
+      <button className="button-dark" disabled={busy}>{busy ? tr('جارٍ التحميل…', 'Loading…') : tr('تطبيق', 'Apply')}</button>
+      <button type="button" disabled={busy} onClick={() => { setForm(empty); load(empty); }}>{tr('مسح التصفية', 'Clear filters')}</button>
+    </form>
+    <p className="muted">{tr('الأوقات بتوقيت جهازك.', 'Times are in your local time.')}</p>
+    {error && <p className="live-error" role="alert">{error}</p>}
+    <p role="status" className="muted">{tr(`عدد النتائج: ${events.length}`, `Results: ${events.length}`)}</p>
+    <div className="rows">{events.map(e => <div key={e.id}><span><b>{e.action}</b> <span className="role-pill">{resultText(e.result)}</span>
+      <small>{fmt(e.createdAt)} · {tr('المنفِّذ', 'Actor')}: {e.actorEmail ?? e.actorId ?? '—'}{e.actorRole ? ` (${e.actorRole})` : ''} → {e.targetType ?? '—'}:{e.targetId ?? '—'}{e.ip ? ` · ${e.ip}` : ''}</small>
+      {e.reason && <small>{tr('السبب', 'Reason')}: {e.reason}</small>}
+      {(e.before != null || e.after != null) && <small dir="ltr">{tr('قبل', 'Before')}: {JSON.stringify(e.before)} · {tr('بعد', 'After')}: {JSON.stringify(e.after)}</small>}</span></div>)}
+      {!events.length && !busy && !error && <p className="muted">{tr('لا توجد سجلات مطابقة.', 'No matching entries.')}</p>}</div></div>;
 }

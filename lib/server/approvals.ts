@@ -1,7 +1,7 @@
 import { and, desc, eq, gt, inArray, lte, or } from 'drizzle-orm';
 import { getDb } from '../../db';
 import { accounts, adminRequests, sessions } from '../../db/schema';
-import { audit } from './audit';
+import { audit, auditDenied } from './audit';
 import { effectiveRole, isAdminRole, type Principal } from './auth';
 import { adminEmails } from './config';
 import { HttpError } from './http';
@@ -79,7 +79,13 @@ export async function createRequest(
     if (dup) return { id: dup.id, expiresAt: dup.expiresAt, duplicate: true };
     throw new HttpError(500, 'Could not store the request', 'internal_error');
   }
-  await audit(request, requester.userId, 'admin.request_created', { type: 'account', id: input.targetUserId }, { requestId: row.id, kind: input.kind, ...input.payload, reason: input.reason });
+  try {
+    await audit(request, requester.userId, 'admin.request_created', { type: 'account', id: input.targetUserId }, { requestId: row.id, kind: input.kind, ...input.payload }, { reason: input.reason, actorRole: requester.role, sensitive: true });
+  } catch (e) {
+    // No audit row, no request: close it so nothing pending exists without a trail.
+    await db.update(adminRequests).set({ status: 'rejected', decidedAt: Date.now(), decisionReason: 'audit_unavailable' }).where(eq(adminRequests.id, row.id));
+    throw e;
+  }
   return { id: row.id, expiresAt: row.expiresAt, duplicate: false };
 }
 
@@ -118,7 +124,7 @@ async function assertStillValid(request: Request, r: RequestRow, actor: Actor): 
     const rejected = await db.update(adminRequests).set({ status: 'rejected', decidedBy: actor.userId, decidedAt: now, decisionReason: 'stale' }).where(and(eq(adminRequests.id, r.id), eq(adminRequests.status, 'pending'))).returning({ id: adminRequests.id });
     // Nothing rejected means a parallel call already decided it; the claim below then reports that outcome.
     if (!rejected.length) return;
-    await audit(request, actor.userId, 'admin.request_rejected', { type: 'account', id: r.targetUserId }, { requestId: r.id, kind: r.kind, requestedBy: r.requestedBy, reason: 'stale', detail: problem });
+    await audit(request, actor.userId, 'admin.request_rejected', { type: 'account', id: r.targetUserId }, { requestId: r.id, kind: r.kind, requestedBy: r.requestedBy, reason: 'stale', detail: problem }, { result: 'denied', reason: 'stale', actorRole: actor.role });
     throw new HttpError(409, `${problem} Make a new request if it is still needed.`, 'request_stale');
   }
   if (target.status !== 'active') throw new HttpError(409, 'This account is not active. Nothing was changed.', 'target_inactive');
@@ -151,13 +157,25 @@ export async function decideRequest(request: Request, actor: Actor, id: string, 
   if (!r) throw new HttpError(404, 'Request not found', 'not_found');
   const isRequester = r.requestedBy === actor.userId;
   const mayDecide = r.kind === 'role_change' ? actor.role === 'super_admin' : isAdminRole(actor.role);
+  // Every refusal leaves a `denied` row, then the same error as before.
+  const deny = async (status: number, message: string, code: string): Promise<never> => {
+    await auditDenied(request, actor.userId, 'admin.request_denied', { type: 'account', id: r.targetUserId }, code, { actorRole: actor.role });
+    throw new HttpError(status, message, code);
+  };
   if (action === 'approve') {
-    if (isRequester) throw new HttpError(403, 'You cannot approve your own request. Another admin must approve it.', 'self_approval');
-    if (r.targetUserId === actor.userId) throw new HttpError(403, 'You cannot approve a request about your own account.', 'self_target');
-    if (!mayDecide) throw new HttpError(403, r.kind === 'role_change' ? 'Only a super admin can approve a role change.' : 'Forbidden', r.kind === 'role_change' ? 'super_admin_required' : 'forbidden');
-    if (r.kind === 'credit_adjustment') assertRecentMfa(actor); // money: MFA verified in the last 15 minutes
+    if (isRequester) await deny(403, 'You cannot approve your own request. Another admin must approve it.', 'self_approval');
+    if (r.targetUserId === actor.userId) await deny(403, 'You cannot approve a request about your own account.', 'self_target');
+    if (!mayDecide) await deny(403, r.kind === 'role_change' ? 'Only a super admin can approve a role change.' : 'Forbidden', r.kind === 'role_change' ? 'super_admin_required' : 'forbidden');
+    if (r.kind === 'credit_adjustment') {
+      try {
+        assertRecentMfa(actor); // money: MFA verified in the last 15 minutes
+      } catch (e) {
+        if (e instanceof HttpError) await deny(e.status, e.message, e.code ?? 'mfa_recent_required');
+        throw e;
+      }
+    }
   } else if (!isRequester && !mayDecide) {
-    throw new HttpError(403, r.kind === 'role_change' ? 'Only a super admin can reject a role change.' : 'Forbidden', r.kind === 'role_change' ? 'super_admin_required' : 'forbidden');
+    await deny(403, r.kind === 'role_change' ? 'Only a super admin can reject a role change.' : 'Forbidden', r.kind === 'role_change' ? 'super_admin_required' : 'forbidden');
   }
 
   const next = action === 'approve' ? 'approved' : 'rejected';
@@ -183,21 +201,31 @@ export async function decideRequest(request: Request, actor: Actor, id: string, 
     if (cur?.status === 'expired') throw new HttpError(410, 'This request has expired. Make a new one.', 'request_expired');
     throw new HttpError(409, `This request is already ${cur?.status ?? 'closed'}.`, 'request_closed', { status: cur?.status });
   }
+  const p = JSON.parse(r.payload) as Record<string, unknown>;
+  const target = { type: 'account', id: r.targetUserId };
+  const revert = () => db.update(adminRequests).set({ status: 'pending', decidedBy: null, decidedAt: null, decisionReason: null }).where(eq(adminRequests.id, id));
+  // Write-ahead: the audit rows are written BEFORE the change. If they cannot be written (503 audit_unavailable) the claim is
+  // put back and nothing is applied. If the change then fails, a `failed` row follows. Rows use the same actions as before.
+  try {
+    await audit(request, actor.userId, action === 'approve' ? 'admin.request_approved' : 'admin.request_rejected', target, { requestId: id, kind: r.kind, requestedBy: r.requestedBy, ...p }, { reason, actorRole: actor.role, after: { status: next }, sensitive: action === 'approve' });
+    if (action === 'approve') {
+      // Same audit actions the direct routes wrote before, so existing audit views keep working.
+      if (r.kind === 'credit_adjustment') await audit(request, actor.userId, 'admin.credit_adjustment', target, { amountUsd: p.amountUsd, note: p.note, requestId: id }, { reason, actorRole: actor.role, after: { amountUsd: p.amountUsd }, sensitive: true });
+      else await audit(request, actor.userId, 'admin.user_updated', target, { role: p.role, requestId: id }, { reason, actorRole: actor.role, before: { role: p.from }, after: { role: p.role }, sensitive: true });
+    }
+  } catch (e) {
+    await revert();
+    throw e;
+  }
   if (action === 'approve') {
     try {
       await applyRequest(r, actor);
     } catch (e) {
       // Not applied: put it back so the request is not lost.
-      await db.update(adminRequests).set({ status: 'pending', decidedBy: null, decidedAt: null, decisionReason: null }).where(eq(adminRequests.id, id));
+      await revert();
+      await audit(request, actor.userId, 'admin.request_apply_failed', target, { requestId: id, kind: r.kind }, { result: 'failed', reason: e instanceof Error ? e.message.slice(0, 200) : 'apply failed', actorRole: actor.role });
       throw e;
     }
-  }
-  const p = JSON.parse(r.payload) as Record<string, unknown>;
-  await audit(request, actor.userId, action === 'approve' ? 'admin.request_approved' : 'admin.request_rejected', { type: 'account', id: r.targetUserId }, { requestId: id, kind: r.kind, requestedBy: r.requestedBy, ...p, reason });
-  if (action === 'approve') {
-    // Same audit actions the direct routes wrote before, so existing audit views keep working.
-    if (r.kind === 'credit_adjustment') await audit(request, actor.userId, 'admin.credit_adjustment', { type: 'account', id: r.targetUserId }, { amountUsd: p.amountUsd, note: p.note, requestId: id });
-    else await audit(request, actor.userId, 'admin.user_updated', { type: 'account', id: r.targetUserId }, { role: p.role, requestId: id });
   }
   return { status: next, duplicate: false };
 }

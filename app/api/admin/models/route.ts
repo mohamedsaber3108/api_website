@@ -1,3 +1,4 @@
+import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { getDb } from '../../../../db';
 import { modelConfigs } from '../../../../db/schema';
@@ -20,7 +21,10 @@ export const PUT = handle(async request => {
   const admin = await requireRole(request, 'admin');
   const body = await parseBody(request, z.object({ modelId: z.string().regex(/^[a-zA-Z0-9._:\/-]{3,150}$/), enabled: z.boolean(), markupPercent: z.number().int().min(0).max(500).nullable(), note: z.string().max(200).nullable().optional() }));
   const values = { modelId: body.modelId, enabled: body.enabled ? 1 : 0, markupPercent: body.markupPercent, note: body.note ?? null, updatedAt: Date.now() };
-  await getDb().insert(modelConfigs).values(values).onConflictDoUpdate({ target: modelConfigs.modelId, set: values });
-  await audit(request, admin.userId, 'admin.model_config', { type: 'model', id: body.modelId }, body);
+  const db = getDb();
+  const [old] = await db.select().from(modelConfigs).where(eq(modelConfigs.modelId, body.modelId)).limit(1);
+  // Markup changes money: write the audit row first (sensitive), then change.
+  await audit(request, admin.userId, 'admin.model_config', { type: 'model', id: body.modelId }, body, { before: old ? { enabled: !!old.enabled, markupPercent: old.markupPercent } : null, after: { enabled: body.enabled, markupPercent: body.markupPercent }, actorRole: admin.role, sensitive: true });
+  await db.insert(modelConfigs).values(values).onConflictDoUpdate({ target: modelConfigs.modelId, set: values });
   return json({ ok: true });
 });
