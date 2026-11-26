@@ -9,7 +9,8 @@ const PATTERNS: [RegExp, string][] = [
   [/\bsk-[A-Za-z0-9_-]{8,}/g, '[redacted-key]'],
   [/\bwasl_[a-f0-9]{16,}/gi, '[redacted-key]'],
   [/\b[a-f0-9]{32,}\b/gi, '[redacted-token]'],
-  [/\b(?:whsec|sk|rk|pk)_(?:live|test)_[A-Za-z0-9]+/g, '[redacted-key]'],
+  [/\b(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]+/g, '[redacted-key]'],
+  [/\bwhsec_[A-Za-z0-9]+/g, '[redacted-key]'],
   [/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, '[redacted-email]'],
 ];
 

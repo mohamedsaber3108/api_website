@@ -55,11 +55,13 @@ describe('public per-IP limits: 429 + Retry-After + Arabic and English message w
     await expectLimit(60, async () => modelsGet(get('/api/v1/models', a)));
     const res = await modelGet(get('/api/v1/models/x/y', a), { params: Promise.resolve({ slug: ['x', 'y'] }) });
     expect(res.status).toBe(429);
+    expect(res.headers.get('access-control-allow-origin')).toBe('*');
   });
-  it('/api/v1/pricing/estimate: 60 per minute', async () => {
+  it('/api/v1/pricing/estimate: 60 per minute, CORS header kept on the 429', async () => {
     const a = ip();
     // Bad parameters answer 400 and still count: the limit sits in front of validation.
-    await expectLimit(60, async () => estimateGet(get('/api/v1/pricing/estimate', a)), r => r.status === 400);
+    const res = await expectLimit(60, async () => estimateGet(get('/api/v1/pricing/estimate', a)), r => r.status === 400);
+    expect(res.headers.get('access-control-allow-origin')).toBe('*');
   });
   it('/api/v1/try: 5 per minute per IP, counted before the key check', async () => {
     const a = ip();

@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { env } from 'cloudflare:workers';
 import { eq } from 'drizzle-orm';
 import { getDb } from '../db';
@@ -8,7 +8,7 @@ import { POST as verifyEmail } from '../app/api/auth/verify-email/route';
 import { POST as resetPassword } from '../app/api/auth/reset-password/route';
 import { createAuthToken } from '../lib/server/auth';
 import { normalizeEmail } from '../lib/server/bonus';
-import { getBalanceMicroUsd } from '../lib/server/ledger';
+import { addLedgerEntry, getBalanceMicroUsd } from '../lib/server/ledger';
 import { req, startDb } from './helpers/db';
 
 let h: Awaited<ReturnType<typeof startDb>>;
@@ -78,6 +78,36 @@ describe('sign-up bonus: once per verified e-mail, no schema change', () => {
     expect(await getBalanceMicroUsd(userId)).toBe(5_000_000);
     await verify(token);
     expect(await getBalanceMicroUsd(userId)).toBe(5_000_000);
+  });
+
+  it('an account already paid under the old registration key gets no second credit', async () => {
+    const { userId, token } = await signUp('legacy@example.test');
+    await addLedgerEntry({ userId, deltaMicroUsd: 5_000_000, type: 'bonus', idempotencyKey: `bonus:signup:${userId}`, note: 'Sign-up credit' });
+    expect((await verify(token)).status).toBe(200);
+    expect(await getBalanceMicroUsd(userId)).toBe(5_000_000);
+  });
+
+  it('a bonus failure after verification still answers 200 and keeps the account verified', async () => {
+    const { userId, token } = await signUp('hiccup@example.test');
+    const ledger = await import('../lib/server/ledger');
+    const spy = vi.spyOn(ledger, 'addLedgerEntry').mockRejectedValueOnce(new Error('D1 hiccup for hiccup@example.test'));
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      expect((await verify(token)).status).toBe(200);
+      expect(spy).toHaveBeenCalledTimes(1); // the failure really happened
+      expect(log).toHaveBeenCalled();
+      expect(JSON.stringify(log.mock.calls)).not.toContain('hiccup@example.test');
+    } finally { spy.mockRestore(); log.mockRestore(); }
+    const [row] = await getDb().select().from(accounts).where(eq(accounts.userId, userId));
+    expect(row!.emailVerifiedAt).not.toBeNull();
+  });
+
+  it('the reset path writes the domain-only metric row too', async () => {
+    const { userId } = await signUp('resetmetric@disposable.example');
+    const reset = await createAuthToken(userId, 'reset_password', 3600_000);
+    await resetPassword(req('/api/auth/reset-password', { method: 'POST', headers: nextIp(), body: { token: reset, password: 'another-long-password' } }), ctx);
+    const rows = await getDb().select().from(auditLogs).where(eq(auditLogs.actorId, userId));
+    expect(rows.filter(r => r.action === 'auth.signup_bonus').map(r => r.meta)).toEqual(['{"domain":"disposable.example"}']);
   });
 
   it('records one metric row per grant with the domain only, never the address', async () => {

@@ -104,6 +104,7 @@ describe('redact()', () => {
     ['Wasl key', `key wasl_${'a1'.repeat(32)}`, 'a1a1a1a1'],
     ['64-hex token', `token ${'0f'.repeat(32)}`, '0f0f0f0f'],
     ['Stripe key', 'sk_live_51Abcdef123456', 'sk_live_51Abcdef123456'],
+    ['Stripe webhook secret', 'secret whsec_Ab12Cd34Ef56Gh78', 'whsec_Ab12Cd34Ef56Gh78'],
     ['SQL params', 'bad insert params: one,two,three', 'one,two,three'],
   ])('removes %s', (_name, input, secret) => {
     expect(redact(input)).not.toContain(secret);

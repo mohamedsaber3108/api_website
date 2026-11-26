@@ -8,6 +8,7 @@ import { grantSignupBonus } from '../../../../lib/server/bonus';
 import { hashPassword } from '../../../../lib/server/crypto';
 import { clientIp, fail, handle, json, parseBody, passwordSchema, requireSameOrigin } from '../../../../lib/server/http';
 import { rateLimit } from '../../../../lib/server/ratelimit';
+import { errText } from '../../../../lib/server/redact';
 
 export const dynamic = 'force-dynamic';
 
@@ -25,6 +26,13 @@ export const POST = handle(async request => {
   ]);
   await audit(request, userId, 'auth.password_reset', { type: 'account', id: userId });
   const [acct] = await db.select({ email: accounts.email }).from(accounts).where(eq(accounts.userId, userId)).limit(1);
-  if (acct) await grantSignupBonus(userId, acct.email);
+  try {
+    if (acct && (await grantSignupBonus(userId, acct.email))) {
+      await audit(request, userId, 'auth.signup_bonus', { type: 'account', id: userId }, { domain: acct.email.split('@')[1] });
+    }
+  } catch (e) {
+    // The link is already used and the password changed; a bonus failure must not turn this into a 500.
+    console.error('signup bonus failed', errText(e));
+  }
   return json({ ok: true });
 });
