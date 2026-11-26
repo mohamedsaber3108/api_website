@@ -19,6 +19,7 @@ import * as confirm from '../app/api/auth/mfa/confirm/route';
 import * as recovery from '../app/api/auth/mfa/recovery/route';
 import * as status from '../app/api/auth/mfa/status/route';
 import * as verify from '../app/api/auth/mfa/verify/route';
+import { normaliseCodeInput } from '../lib/mfa-code';
 import { hashPassword, hmacSha256Hex, sha256Hex } from '../lib/server/crypto';
 import { base32Decode, base32Encode, currentStep, decryptSecret, encryptSecret, hotp } from '../lib/server/mfa';
 import { makeUser, newSession, req, startDb } from './helpers/db';
@@ -216,6 +217,25 @@ describe('verify (step-up)', () => {
   it('rejects a code from outside the previous/next window', async () => {
     const a = await enrolledAdmin();
     expect((await doVerify(await newSession(a.userId), await codeAt(a.secret, 3))).status).toBe(401);
+  });
+  it('accepts Arabic-Indic and Persian digits and spaces (Arabic keyboard); the same code in 0-9 passes too', async () => {
+    const arabic = (s: string) => s.replace(/\d/g, d => String.fromCharCode(0x0660 + Number(d)));
+    const persian = (s: string) => s.replace(/\d/g, d => String.fromCharCode(0x06f0 + Number(d)));
+    expect(normaliseCodeInput('٣٤٥٦٧٨')).toBe('345678');
+    expect(normaliseCodeInput(' ۳۴۵ ۶۷۸ ')).toBe('345678');
+    const a = await enrolledAdmin();
+    const c1 = await codeAt(a.secret, 1);
+    expect((await doVerify(await newSession(a.userId), ` ${arabic(c1.slice(0, 3))} ${arabic(c1.slice(3))} `)).status).toBe(200);
+    const b = await enrolledAdmin();
+    expect((await doVerify(await newSession(b.userId), persian(await codeAt(b.secret, 1)))).status).toBe(200);
+    const c = await enrolledAdmin();
+    expect((await doVerify(await newSession(c.userId), await codeAt(c.secret, 1))).status).toBe(200);
+  });
+  it('confirms enrolment with an Arabic-digit code', async () => {
+    const a = await makeUser({ role: 'admin', mfaVerifiedAt: null });
+    const { secret } = await (await doBegin(a.cookie)).json();
+    const code = (await codeAt(secret)).replace(/\d/g, d => String.fromCharCode(0x0660 + Number(d)));
+    expect((await doConfirm(a.cookie, code)).status).toBe(200);
   });
   it('5 wrong codes lock the account for 15 minutes, even for the right code', async () => {
     const a = await enrolledAdmin();

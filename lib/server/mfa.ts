@@ -2,6 +2,7 @@ import { and, eq, isNull, or, lt } from 'drizzle-orm';
 import { env } from 'cloudflare:workers';
 import { getDb } from '../../db';
 import { mfaCredentials, mfaRecoveryCodes, sessions } from '../../db/schema';
+import { normaliseCodeInput } from '../mfa-code';
 import { audit } from './audit';
 import { isProduction } from './config';
 import { fromHex, hmacSha256Hex, safeEqual, toHex } from './crypto';
@@ -171,7 +172,7 @@ async function recordFailure(request: Request, userId: string, kind: string): Pr
 
 // ---- recovery codes ----
 
-const normaliseRecovery = (s: string) => s.toUpperCase().replace(/[\s-]/g, '');
+const normaliseRecovery = (s: string) => normaliseCodeInput(s).toUpperCase().replace(/-/g, '');
 
 /** HMAC-SHA-256 keyed with MFA_ENCRYPTION_KEY: a copy of the table alone is not enough to test guesses offline. */
 const recoveryHash = (code: string) => hmacSha256Hex(keyMaterial(), `wasl-mfa-recovery-v1:${normaliseRecovery(code)}`);
@@ -195,7 +196,8 @@ async function issueRecoveryCodes(userId: string): Promise<string[]> {
 // ---- operations ----
 
 /** Atomically accepts a TOTP step only if it is newer than the last accepted one. */
-async function acceptTotp(userId: string, code: string, requireEnrolled: boolean): Promise<boolean> {
+async function acceptTotp(userId: string, rawCode: string, requireEnrolled: boolean): Promise<boolean> {
+  const code = normaliseCodeInput(rawCode);
   const db = getDb();
   const [row] = await db.select().from(mfaCredentials).where(eq(mfaCredentials.userId, userId)).limit(1);
   if (!row || (requireEnrolled && !row.enrolledAt)) throw new HttpError(409, 'MFA is not set up for this account', 'mfa_not_enrolled');
@@ -253,7 +255,7 @@ export async function confirmEnrolment(request: Request, p: { userId: string; se
 export async function verifyStepUp(request: Request, p: { userId: string; sessionId: string }, code: string) {
   await assertNotLocked(request, p.userId);
   keyMaterial();
-  const clean = code.replace(/\s/g, '');
+  const clean = normaliseCodeInput(code);
   if (/^\d{6}$/.test(clean)) {
     if (!(await acceptTotp(p.userId, clean, true))) return recordFailure(request, p.userId, 'totp');
   } else {
@@ -270,7 +272,7 @@ export async function verifyStepUp(request: Request, p: { userId: string; sessio
 export async function regenerateRecovery(request: Request, p: { userId: string }, code: string) {
   await assertNotLocked(request, p.userId);
   keyMaterial();
-  if (!(await acceptTotp(p.userId, code.replace(/\s/g, ''), true))) return recordFailure(request, p.userId, 'regenerate');
+  if (!(await acceptTotp(p.userId, code, true))) return recordFailure(request, p.userId, 'regenerate');
   const recoveryCodes = await issueRecoveryCodes(p.userId);
   await clearFailures(p.userId);
   await audit(request, p.userId, 'auth.mfa_recovery_regenerated', { type: 'account', id: p.userId });

@@ -22,7 +22,9 @@ export default function AdminConsole({ lang, session }: { lang: 'ar' | 'en'; ses
   const [mfa, setMfa] = useState<'checking' | 'ok' | 'need'>(isAdmin ? 'checking' : 'ok');
   const [mfaReason, setMfaReason] = useState('');
   useEffect(() => { if (isAdmin) api<{ verified: boolean }>('/api/auth/mfa/status').then(s => setMfa(s.verified ? 'ok' : 'need')).catch(() => setMfa('need')); }, [isAdmin]);
-  const stepUp = () => { setMfaReason(tr('لتعديل الرصيد أدخل رمزًا جديدًا (صالح ١٥ دقيقة).', 'To change credit, enter a fresh code (valid for 15 minutes).')); setMfa('need'); };
+  // Step-up shows the MFA panel above the console; the console stays mounted so a typed credit form is not lost (WCAG 3.3.7).
+  const [stepUpOpen, setStepUpOpen] = useState(false);
+  const stepUp = () => { setMfaReason(tr('لتعديل الرصيد أدخل رمزًا جديدًا (صالح ١٥ دقيقة). ما كتبته محفوظ.', 'To change credit, enter a fresh code (valid for 15 minutes). What you typed is kept.')); setStepUpOpen(true); };
   const fmt = (t: number) => new Date(t).toLocaleString(ar ? 'ar-EG' : 'en-US', { dateStyle: 'medium', timeStyle: 'short' });
   const tabs: { id: Tab; icon: typeof Users; label: string; admin: boolean }[] = [
     { id: 'overview', icon: LayoutDashboard, label: tr('نظرة عامة', 'Overview'), admin: false },
@@ -33,8 +35,9 @@ export default function AdminConsole({ lang, session }: { lang: 'ar' | 'en'; ses
     { id: 'audit', icon: FileClock, label: tr('سجل التدقيق', 'Audit log'), admin: true },
   ];
   if (mfa !== 'ok') return <main className="inner-page"><section className="page-heading section"><span className="section-kicker">WASL / ADMIN</span><h1>{tr('لوحة الإدارة', 'Admin console')}</h1><div className="page-heading-art">◈</div></section>
-    <section className="section">{mfa === 'checking' ? <p className="muted">…</p> : <MfaPanel tr={tr} reason={mfaReason} onVerified={() => { setMfaReason(''); setMfa('ok'); }} />}</section></main>;
+    <section className="section">{mfa === 'checking' ? <p className="muted" role="status">{tr('جارٍ التحميل…', 'Loading…')}</p> : <MfaPanel tr={tr} reason={mfaReason} onVerified={() => { setMfaReason(''); setMfa('ok'); }} />}</section></main>;
   return <main className="inner-page"><section className="page-heading section"><span className="section-kicker">WASL / ADMIN</span><h1>{tr('لوحة الإدارة', 'Admin console')}</h1><div className="page-heading-art">◈</div></section>
+    {stepUpOpen && <section className="section"><MfaPanel tr={tr} reason={mfaReason} onVerified={() => { setMfaReason(''); setStepUpOpen(false); }} /></section>}
     <section className="section dashboard-app"><aside className="dash-nav">{tabs.filter(t => isAdmin || !t.admin).map(t => <button key={t.id} className={tab === t.id ? 'dash-selected' : ''} onClick={() => setTab(t.id)}><t.icon size={18} />{t.label}</button>)}</aside>
       <div className="dash-body">
         {tab === 'overview' && <OverviewTab tr={tr} fmt={fmt} />}

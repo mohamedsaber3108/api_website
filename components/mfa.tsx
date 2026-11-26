@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { CheckCircle2, ShieldCheck } from 'lucide-react';
+import { normaliseCodeInput } from '../lib/mfa-code';
 import { api, ApiError, errorMessage } from '../lib/client-api';
 
 type Tr = (a: string, e: string) => string;
@@ -41,8 +42,8 @@ export default function MfaPanel({ tr, onVerified, reason }: { tr: Tr; onVerifie
     e.preventDefault();
     setBusy(true); setError('');
     try {
-      if (status?.enrolled) { await api('/api/auth/mfa/verify', { method: 'POST', body: { code } }); onVerified(); }
-      else { const r = await api<{ recoveryCodes: string[] }>('/api/auth/mfa/confirm', { method: 'POST', body: { code } }); setCodes(r.recoveryCodes); }
+      if (status?.enrolled) { await api('/api/auth/mfa/verify', { method: 'POST', body: { code: normaliseCodeInput(code) } }); onVerified(); }
+      else { const r = await api<{ recoveryCodes: string[] }>('/api/auth/mfa/confirm', { method: 'POST', body: { code: normaliseCodeInput(code) } }); setCodes(r.recoveryCodes); }
     } catch (err) { setError(mfaError(err, tr)); } finally { setBusy(false); setCode(''); }
   };
 
@@ -54,12 +55,12 @@ export default function MfaPanel({ tr, onVerified, reason }: { tr: Tr; onVerifie
     <button className="button-primary" onClick={onVerified}><CheckCircle2 size={18} aria-hidden="true" /> {tr('حفظتها، تابع', 'I saved them, continue')}</button>
   </>);
 
-  if (!status) return shell(error ? <p className="live-error" role="alert">{error}</p> : <p className="muted">…</p>);
+  if (!status) return shell(error ? <p className="live-error" role="alert">{error}</p> : <p className="muted" role="status">{tr('جارٍ التحميل…', 'Loading…')}</p>);
 
   if (!status.enrolled && !setup) return shell(<>
     <p>{tr('حسابك إداري، ويلزم تفعيل التحقق بخطوتين قبل فتح لوحة الإدارة. ستحتاج تطبيق مصادقة على هاتفك.', 'Your account is an admin account. Set up two-step verification before the admin area opens. You need an authenticator app on your phone.')}</p>
     {error && <p className="live-error" role="alert">{error}</p>}
-    <button className="button-primary" disabled={busy} onClick={begin}>{busy ? '…' : tr('ابدأ الإعداد', 'Start setup')}</button>
+    <button className="button-primary" disabled={busy} onClick={begin}>{busy ? tr('جارٍ التحضير…', 'Preparing…') : tr('ابدأ الإعداد', 'Start setup')}</button>
   </>);
 
   return <form onSubmit={submit} className="auth-wrap"><div className="auth-card"><div className="auth-form">
@@ -74,6 +75,6 @@ export default function MfaPanel({ tr, onVerified, reason }: { tr: Tr; onVerifie
       <input required dir="ltr" inputMode={status.enrolled ? 'text' : 'numeric'} autoComplete="one-time-code" autoFocus minLength={6} maxLength={20} value={code} onChange={e => setCode(e.target.value)} />
     </label>
     {error && <p className="live-error" role="alert">{error}</p>}
-    <button className="button-primary" disabled={busy}>{busy ? '…' : status.enrolled ? tr('تحقق', 'Verify') : tr('تأكيد وتفعيل', 'Confirm and enable')}</button>
+    <button className="button-primary" disabled={busy}>{busy ? tr('جارٍ التحقق…', 'Verifying…') : status.enrolled ? tr('تحقق', 'Verify') : tr('تأكيد وتفعيل', 'Confirm and enable')}</button>
   </div></div></form>;
 }
