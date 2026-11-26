@@ -3,9 +3,10 @@ import { useState } from 'react';
 import { ArrowUpRight, Eye, EyeOff, Send, ShieldCheck, Wallet } from 'lucide-react';
 import type { CatalogModel } from '../lib/catalog';
 import type { SessionInfo } from '../lib/client-api';
+import { creditShortfallFromError, type CreditShortfall } from '../lib/credit-error';
 type Props = { lang: 'ar' | 'en'; models: CatalogModel[]; selected: CatalogModel; session: SessionInfo | null; onSignIn: () => void };
 type Usage = { prompt_tokens?: number; completion_tokens?: number; cost?: number } | null;
-type ChatReply = { error?: { message?: string }; choices?: { message?: { content?: unknown } }[]; usage?: Usage; wasl?: { charged_usd?: number } };
+type ChatReply = { error?: { message?: string; code?: string; need_micro_usd?: number; available_micro_usd?: number }; choices?: { message?: { content?: unknown } }[]; usage?: Usage; wasl?: { charged_usd?: number } };
 type TryReply = { error?: string; answer?: string; usage?: Usage };
 
 export default function LiveTry({ lang, models, selected, session, onSignIn }: Props) {
@@ -19,6 +20,7 @@ export default function LiveTry({ lang, models, selected, session, onSignIn }: P
   const [prompt, setPrompt] = useState('');
   const [answer, setAnswer] = useState('');
   const [error, setError] = useState('');
+  const [shortfall, setShortfall] = useState<CreditShortfall | null>(null);
   const [busy, setBusy] = useState(false);
   const [usage, setUsage] = useState<Usage>(null);
   const [charged, setCharged] = useState<number | null>(null);
@@ -28,12 +30,16 @@ export default function LiveTry({ lang, models, selected, session, onSignIn }: P
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (busy) return;
-    setBusy(true); setError(''); setAnswer(''); setUsage(null); setCharged(null);
+    setBusy(true); setError(''); setShortfall(null); setAnswer(''); setUsage(null); setCharged(null);
     try {
       if (activeMode === 'credits') {
         const r = await fetch('/api/account/playground', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: chosen, messages: [{ role: 'user', content: prompt }], max_tokens: 1024 }) });
         const j = (await r.json()) as ChatReply;
-        if (!r.ok) throw new Error(j?.error?.message || `HTTP ${r.status}`);
+        if (!r.ok) {
+          const s = r.status === 402 ? creditShortfallFromError(lang, j?.error) : null;
+          if (s) { setShortfall(s); return; }
+          throw new Error(j?.error?.message || `HTTP ${r.status}`);
+        }
         const content = j?.choices?.[0]?.message?.content;
         setAnswer(typeof content === 'string' && content ? content : ar ? 'النموذج لم يُرجع نصًا.' : 'The model returned no text.');
         setUsage(j.usage ?? null);
@@ -65,6 +71,7 @@ export default function LiveTry({ lang, models, selected, session, onSignIn }: P
       <div className="live-submit"><span><ShieldCheck size={16} />{activeMode === 'byok' ? (ar ? 'لا نحفظ المفتاح أو المحادثة' : 'No key or conversation storage') : (ar ? 'لا نحفظ نص المحادثة' : 'Conversation text is not stored')}</span>
         <button className="button-primary" type="submit" disabled={busy || !prompt.trim() || (activeMode === 'byok' && !key.trim())}>{busy ? (ar ? 'جارٍ الإرسال...' : 'Sending...') : (ar ? 'أرسل طلبًا حقيقيًا' : 'Send live request')} <Send size={16} /></button></div>
       {error && <p className="live-error" role="alert">{error}</p>}
+      {shortfall && <p className="live-error" role="alert">{shortfall.lead}<bdi>{shortfall.need}</bdi>{shortfall.mid}<bdi>{shortfall.have}</bdi>{shortfall.tail} <a href={shortfall.href}>{shortfall.linkLabel}</a></p>}
       {answer && <div className="live-answer" aria-live="polite"><strong>{ar ? 'رد النموذج' : 'Model response'}</strong><p>{answer}</p>{usage && <small>{ar ? 'رموز الإدخال' : 'Input tokens'}: {usage.prompt_tokens ?? '—'} · {ar ? 'رموز الإخراج' : 'Output tokens'}: {usage.completion_tokens ?? '—'}{charged !== null ? ` · ${ar ? 'الخصم' : 'charged'} $${charged.toFixed(6)}` : typeof usage.cost === 'number' ? ` · $${usage.cost.toFixed(6)}` : ''}</small>}</div>}
     </form>
     {activeMode === 'byok' && <p className="live-fine"><a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer">{ar ? 'إدارة مفاتيح OpenRouter' : 'Manage OpenRouter keys'} <ArrowUpRight size={13} /></a></p>}
