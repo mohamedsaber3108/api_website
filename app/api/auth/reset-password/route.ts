@@ -26,13 +26,17 @@ export const POST = handle(async request => {
   ]);
   await audit(request, userId, 'auth.password_reset', { type: 'account', id: userId });
   const [acct] = await db.select({ email: accounts.email }).from(accounts).where(eq(accounts.userId, userId)).limit(1);
+  // bonus: true = credit added now, false = not added (once per e-mail), null = the check failed.
+  let bonus: boolean | null = false;
   try {
     if (acct && (await grantSignupBonus(userId, acct.email))) {
+      bonus = true;
       await audit(request, userId, 'auth.signup_bonus', { type: 'account', id: userId }, { domain: acct.email.split('@')[1] });
     }
   } catch (e) {
     // The link is already used and the password changed; a bonus failure must not turn this into a 500.
     console.error('signup bonus failed', errText(e));
+    bonus = null;
   }
-  return json({ ok: true });
+  return json({ ok: true, bonus });
 });

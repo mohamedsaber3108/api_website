@@ -41,7 +41,9 @@ describe('sign-up bonus: once per verified e-mail, no schema change', () => {
   it('is not granted at registration, only after the e-mail is verified, and only once', async () => {
     const { userId, token } = await signUp('first@example.test');
     expect(await getBalanceMicroUsd(userId)).toBe(0);
-    expect((await verify(token)).status).toBe(200);
+    const first = await verify(token);
+    expect(first.status).toBe(200);
+    expect(((await first.json()) as { bonus: boolean }).bonus).toBe(true); // the verify page says the credit was added
     expect(await getBalanceMicroUsd(userId)).toBe(5_000_000);
     expect((await verify(token)).status).toBe(400); // the token is single use
     expect(await getBalanceMicroUsd(userId)).toBe(5_000_000);
@@ -59,7 +61,9 @@ describe('sign-up bonus: once per verified e-mail, no schema change', () => {
     const a = await signUp('alias.person@gmail.com');
     const b = await signUp('aliasperson+second@gmail.com');
     const c = await signUp('alias.person+third@googlemail.com');
-    for (const u of [a, b, c]) await verify(u.token);
+    const flags: unknown[] = [];
+    for (const u of [a, b, c]) flags.push(((await (await verify(u.token)).json()) as { bonus: boolean }).bonus);
+    expect(flags).toEqual([true, false, false]); // the verify page tells the others why there is no credit
     const balances = await Promise.all([a, b, c].map(u => getBalanceMicroUsd(u.userId)));
     expect(balances.reduce((x, y) => x + y, 0)).toBe(5_000_000);
     expect(balances[0]).toBe(5_000_000); // the first to verify gets it
@@ -93,7 +97,9 @@ describe('sign-up bonus: once per verified e-mail, no schema change', () => {
     const spy = vi.spyOn(ledger, 'addLedgerEntry').mockRejectedValueOnce(new Error('D1 hiccup for hiccup@example.test'));
     const log = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
-      expect((await verify(token)).status).toBe(200);
+      const res = await verify(token);
+      expect(res.status).toBe(200);
+      expect(((await res.json()) as { bonus: unknown }).bonus).toBeNull(); // unknown, so the page says nothing about the credit
       expect(spy).toHaveBeenCalledTimes(1); // the failure really happened
       expect(log).toHaveBeenCalled();
       expect(JSON.stringify(log.mock.calls)).not.toContain('hiccup@example.test');

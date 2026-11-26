@@ -20,14 +20,18 @@ export const POST = handle(async request => {
   await getDb().update(accounts).set({ emailVerifiedAt: Date.now() }).where(eq(accounts.userId, userId));
   await audit(request, userId, 'auth.email_verified', { type: 'account', id: userId });
   const [acct] = await getDb().select({ email: accounts.email }).from(accounts).where(eq(accounts.userId, userId)).limit(1);
+  // bonus: true = credit added now, false = not added (once per e-mail), null = the check failed.
+  let bonus: boolean | null = false;
   try {
     if (acct && (await grantSignupBonus(userId, acct.email))) {
+      bonus = true;
       // Metric: bonus count per e-mail domain (domains only, no addresses), so disposable-domain use can be counted later.
       await audit(request, userId, 'auth.signup_bonus', { type: 'account', id: userId }, { domain: acct.email.split('@')[1] });
     }
   } catch (e) {
     // The link is already used; a bonus failure must not turn a verified e-mail into a 500.
     console.error('signup bonus failed', errText(e));
+    bonus = null;
   }
-  return json({ ok: true });
+  return json({ ok: true, bonus });
 });
