@@ -130,6 +130,8 @@ async function assertStillValid(request: Request, r: RequestRow, actor: Actor): 
   if (target.status !== 'active') throw new HttpError(409, 'This account is not active. Nothing was changed.', 'target_inactive');
 }
 
+const REAPPLY_WINDOW_MS = 15 * 60 * 1000;
+
 async function applyRequest(r: RequestRow, approver: Actor): Promise<void> {
   const db = getDb();
   const [target] = await db.select({ status: accounts.status }).from(accounts).where(eq(accounts.userId, r.targetUserId)).limit(1);
@@ -148,7 +150,7 @@ async function applyRequest(r: RequestRow, approver: Actor): Promise<void> {
 
 /**
  * Approve or reject. Checks run before any state changes. The claim is one conditional UPDATE (pending -> approved),
- * so two parallel approvals cannot both apply it. A repeated approval returns `duplicate: true` and re-applies the change, which is a no-op if it already ran.
+ * so two parallel approvals cannot both apply it. A repeated approval returns `duplicate: true`. It re-applies only for the same approver within 15 minutes (crash retry).
  */
 export async function decideRequest(request: Request, actor: Actor, id: string, action: 'approve' | 'reject', reason: string) {
   const db = getDb();
@@ -194,8 +196,12 @@ export async function decideRequest(request: Request, actor: Actor, id: string, 
       throw new HttpError(410, 'This request has expired. Make a new one.', 'request_expired');
     }
     if (cur?.status === next) {
-      // A crash after the claim leaves "approved" with nothing applied. Applying again is safe: the ledger key and the role condition make it a no-op if it already ran.
-      if (action === 'approve') await applyRequest(cur, actor);
+      // A crash after the claim leaves "approved" with nothing applied. Only the same approver, within a short window, may re-apply.
+      // Anyone else, or a later retry, changes nothing (a role change must never be re-granted after a later demotion).
+      if (action === 'approve' && cur.decidedBy === actor.userId && cur.decidedAt !== null && now - cur.decidedAt < REAPPLY_WINDOW_MS) {
+        await applyRequest(cur, actor);
+        await audit(request, actor.userId, 'admin.request_reapplied', { type: 'account', id: cur.targetUserId }, { requestId: id, kind: cur.kind });
+      }
       return { status: next, duplicate: true };
     }
     if (cur?.status === 'expired') throw new HttpError(410, 'This request has expired. Make a new one.', 'request_expired');
