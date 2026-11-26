@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, lte, or } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, lte, or } from 'drizzle-orm';
 import { getDb } from '../../db';
 import { accounts, adminRequests, sessions } from '../../db/schema';
 import { audit } from './audit';
@@ -98,24 +98,51 @@ export async function listRequests(status: string) {
   }));
 }
 
+/** Re-checks a request at approval time. A request that no longer matches the world is rejected as stale (409). */
+async function assertStillValid(request: Request, r: RequestRow, actor: Actor): Promise<void> {
+  const db = getDb();
+  const p = JSON.parse(r.payload) as { role?: string; from?: string };
+  const [requester] = await db.select({ role: accounts.role, email: accounts.email, status: accounts.status, verified: accounts.emailVerifiedAt }).from(accounts).where(eq(accounts.userId, r.requestedBy)).limit(1);
+  const [target] = await db.select({ role: accounts.role, status: accounts.status }).from(accounts).where(eq(accounts.userId, r.targetUserId)).limit(1);
+  let problem: string | null = null;
+  if (!target || target.status === 'deleted') throw new HttpError(404, 'User not found', 'not_found');
+  if (!requester || requester.status !== 'active') problem = 'The person who made this request is no longer active.';
+  else if (r.kind === 'role_change') {
+    // Stored role only: ADMIN_EMAILS never lets a requester make or approve role changes.
+    if (requester.role !== 'super_admin') problem = 'The person who made this request is no longer a super admin.';
+    else if (p.role !== 'admin' && p.role !== 'super_admin') problem = 'This request asks for a role that needs no approval.';
+    else if (target.role !== p.from) problem = 'The role of this person changed after the request was made.';
+  } else if (!isAdminRole((await effectiveRole(requester.role, requester.email, !!requester.verified)).role)) problem = 'The person who made this request is no longer an admin.';
+  if (problem) {
+    const now = Date.now();
+    const rejected = await db.update(adminRequests).set({ status: 'rejected', decidedBy: actor.userId, decidedAt: now, decisionReason: 'stale' }).where(and(eq(adminRequests.id, r.id), eq(adminRequests.status, 'pending'))).returning({ id: adminRequests.id });
+    // Nothing rejected means a parallel call already decided it; the claim below then reports that outcome.
+    if (!rejected.length) return;
+    await audit(request, actor.userId, 'admin.request_rejected', { type: 'account', id: r.targetUserId }, { requestId: r.id, kind: r.kind, requestedBy: r.requestedBy, reason: 'stale', detail: problem });
+    throw new HttpError(409, `${problem} Make a new request if it is still needed.`, 'request_stale');
+  }
+  if (target.status !== 'active') throw new HttpError(409, 'This account is not active. Nothing was changed.', 'target_inactive');
+}
+
 async function applyRequest(r: RequestRow, approver: Actor): Promise<void> {
   const db = getDb();
   const [target] = await db.select({ status: accounts.status }).from(accounts).where(eq(accounts.userId, r.targetUserId)).limit(1);
   if (!target || target.status === 'deleted') throw new HttpError(404, 'User not found', 'not_found');
-  const p = JSON.parse(r.payload) as { amountUsd?: number; note?: string; role?: string };
+  const p = JSON.parse(r.payload) as { amountUsd?: number; note?: string; role?: string; from?: string };
   if (r.kind === 'credit_adjustment') {
     // The idempotency key is the request id, so the ledger can never take this request twice.
     await addLedgerEntry({ userId: r.targetUserId, deltaMicroUsd: Math.round((p.amountUsd ?? 0) * 1e6), type: 'adjustment', idempotencyKey: `adjust-request:${r.id}`, note: p.note, createdBy: approver.userId });
   } else {
-    await db.update(accounts).set({ role: p.role as string }).where(eq(accounts.userId, r.targetUserId));
+    // Only from the role the request was made for, so a retry never overwrites a later change.
+    const changed = await db.update(accounts).set({ role: p.role as string }).where(and(eq(accounts.userId, r.targetUserId), eq(accounts.role, p.from ?? ''))).returning({ id: accounts.userId });
     // A role change ends MFA verification of the target's sessions; the new role is read on the target's next request.
-    await db.update(sessions).set({ mfaVerifiedAt: null }).where(eq(sessions.userId, r.targetUserId));
+    if (changed.length) await db.update(sessions).set({ mfaVerifiedAt: null }).where(eq(sessions.userId, r.targetUserId));
   }
 }
 
 /**
  * Approve or reject. Checks run before any state changes. The claim is one conditional UPDATE (pending -> approved),
- * so two parallel approvals cannot both apply it. A repeated approval returns `duplicate: true` and changes nothing.
+ * so two parallel approvals cannot both apply it. A repeated approval returns `duplicate: true` and re-applies the change, which is a no-op if it already ran.
  */
 export async function decideRequest(request: Request, actor: Actor, id: string, action: 'approve' | 'reject', reason: string) {
   const db = getDb();
@@ -134,15 +161,25 @@ export async function decideRequest(request: Request, actor: Actor, id: string, 
   }
 
   const next = action === 'approve' ? 'approved' : 'rejected';
+  if (action === 'approve' && r.status === 'pending') await assertStillValid(request, r, actor);
   const now = Date.now();
   const claimed = await db
     .update(adminRequests)
     .set({ status: next, decidedBy: actor.userId, decidedAt: now, decisionReason: reason })
-    .where(and(eq(adminRequests.id, id), eq(adminRequests.status, 'pending')))
+    .where(and(eq(adminRequests.id, id), eq(adminRequests.status, 'pending'), gt(adminRequests.expiresAt, now)))
     .returning();
   if (claimed.length === 0) {
     const [cur] = await db.select().from(adminRequests).where(eq(adminRequests.id, id)).limit(1);
-    if (cur?.status === next) return { status: next, duplicate: true };
+    if (cur?.status === 'pending' && cur.expiresAt <= now) {
+      // It crossed its expiry between the first check and the claim.
+      await expireStale(now);
+      throw new HttpError(410, 'This request has expired. Make a new one.', 'request_expired');
+    }
+    if (cur?.status === next) {
+      // A crash after the claim leaves "approved" with nothing applied. Applying again is safe: the ledger key and the role condition make it a no-op if it already ran.
+      if (action === 'approve') await applyRequest(cur, actor);
+      return { status: next, duplicate: true };
+    }
     if (cur?.status === 'expired') throw new HttpError(410, 'This request has expired. Make a new one.', 'request_expired');
     throw new HttpError(409, `This request is already ${cur?.status ?? 'closed'}.`, 'request_closed', { status: cur?.status });
   }

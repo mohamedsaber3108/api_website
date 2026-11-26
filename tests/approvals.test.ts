@@ -1,6 +1,6 @@
 import { and, eq, inArray } from 'drizzle-orm';
 import { env } from 'cloudflare:workers';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as requestById from '../app/api/admin/requests/[id]/route';
 import * as requests from '../app/api/admin/requests/route';
 import * as credits from '../app/api/admin/users/[id]/credits/route';
@@ -8,6 +8,7 @@ import * as userById from '../app/api/admin/users/[id]/route';
 import * as users from '../app/api/admin/users/route';
 import { getDb } from '../db';
 import { accounts, adminRequests, auditLogs, sessions } from '../db/schema';
+import { decideRequest } from '../lib/server/approvals';
 import { getPrincipal } from '../lib/server/auth';
 import { getBalanceMicroUsd } from '../lib/server/ledger';
 import { makeUser, req, startDb } from './helpers/db';
@@ -346,5 +347,130 @@ describe('ADMIN_EMAILS grant', () => {
       await bossEmail(u);
       expect((await getPrincipal(req('/x', { cookie: u.cookie })))?.role).toBe('admin');
     });
+  });
+});
+
+describe('stale requests, expiry race, crash retry (fix round 1)', () => {
+  const setRole = (userId: string, role: string) => getDb().update(accounts).set({ role }).where(eq(accounts.userId, userId));
+  const roleOf = async (userId: string) => (await getDb().select().from(accounts).where(eq(accounts.userId, userId)))[0].role;
+  const promote = async (s: { cookie: string }, targetId: string, role = 'admin') => (await (await patch(s.cookie, targetId, { role, reason: 'needs access' })).json()).requestId as string;
+
+  it('requester suspended after the request: approval is refused (409 request_stale) and the request is rejected', async () => {
+    const s1 = await superAdmin();
+    const s2 = await superAdmin();
+    const t = await makeUser();
+    const id = await promote(s1, t.userId);
+    await getDb().update(accounts).set({ status: 'suspended' }).where(eq(accounts.userId, s1.userId));
+    const res = await decide(s2.cookie, id);
+    expect(res.status).toBe(409);
+    expect((await res.json()).code).toBe('request_stale');
+    expect(await roleOf(t.userId)).toBe('customer');
+    expect(await rowOf(id)).toMatchObject({ status: 'rejected', decisionReason: 'stale' });
+    expect(await audits('admin.request_rejected')).toEqual(expect.arrayContaining([expect.objectContaining({ actorId: s2.userId, targetId: t.userId })]));
+  });
+
+  it('requester demoted after the request: refused (role change and credit)', async () => {
+    const s1 = await superAdmin();
+    const s2 = await superAdmin();
+    const a = await admin();
+    const b = await admin();
+    const t = await makeUser();
+    const roleReq = await promote(s1, t.userId);
+    const creditReq = (await (await askCredit(a.cookie, t.userId, 4)).json()).requestId as string;
+    await setRole(s1.userId, 'admin');
+    await setRole(a.userId, 'customer');
+    expect((await decide(s2.cookie, roleReq)).status).toBe(409);
+    const res = await decide(b.cookie, creditReq);
+    expect(res.status).toBe(409);
+    expect((await res.json()).code).toBe('request_stale');
+    expect(await roleOf(t.userId)).toBe('customer');
+    expect(await getBalanceMicroUsd(t.userId)).toBe(0);
+  });
+
+  it('target role changed after the request: no silent demotion (409 request_stale)', async () => {
+    const s1 = await superAdmin();
+    const s2 = await superAdmin();
+    const t = await makeUser();
+    const id = await promote(s1, t.userId);
+    await setRole(t.userId, 'super_admin'); // changed by another path
+    const res = await decide(s2.cookie, id);
+    expect(res.status).toBe(409);
+    expect((await res.json()).code).toBe('request_stale');
+    expect(await roleOf(t.userId)).toBe('super_admin');
+  });
+
+  it('suspended target: neither a promotion nor a credit is approved (409 target_inactive), the request stays pending', async () => {
+    const s1 = await superAdmin();
+    const s2 = await superAdmin();
+    const a = await admin();
+    const b = await admin();
+    const t = await makeUser();
+    const roleReq = await promote(s1, t.userId);
+    const creditReq = (await (await askCredit(a.cookie, t.userId, 2)).json()).requestId as string;
+    await getDb().update(accounts).set({ status: 'suspended' }).where(eq(accounts.userId, t.userId));
+    for (const [cookie, id] of [[s2.cookie, roleReq], [b.cookie, creditReq]] as const) {
+      const res = await decide(cookie, id);
+      expect(res.status).toBe(409);
+      expect((await res.json()).code).toBe('target_inactive');
+      expect((await rowOf(id)).status).toBe('pending');
+    }
+    expect(await roleOf(t.userId)).toBe('customer');
+    expect(await getBalanceMicroUsd(t.userId)).toBe(0);
+  });
+
+  it('expiry race: a request that crosses its expiry between the check and the claim is not approved (410)', async () => {
+    const s1 = await superAdmin();
+    const s2 = await superAdmin();
+    const t = await makeUser();
+    const id = await promote(s1, t.userId);
+    const exp = (await rowOf(id)).expiresAt;
+    const spy = vi.spyOn(Date, 'now');
+    try {
+      // First call is the expiry sweep (still before expiry); every later call is just past it.
+      spy.mockReturnValueOnce(exp - 1).mockReturnValue(exp + 1);
+      await expect(decideRequest(req('/x'), { userId: s2.userId, role: 'super_admin', mfaVerifiedAt: exp - 1 }, id, 'approve', 'checked it')).rejects.toMatchObject({ status: 410, code: 'request_expired' });
+    } finally { spy.mockRestore(); }
+    expect(await roleOf(t.userId)).toBe('customer');
+    expect((await rowOf(id)).status).toBe('expired');
+  });
+
+  it('crash after the claim: approving again applies the credit once', async () => {
+    const a = await admin();
+    const b = await admin();
+    const t = await makeUser();
+    const id = (await (await askCredit(a.cookie, t.userId, 6)).json()).requestId as string;
+    // Simulate the crash: the claim ran, nothing was applied.
+    await getDb().update(adminRequests).set({ status: 'approved', decidedBy: b.userId, decidedAt: Date.now() }).where(eq(adminRequests.id, id));
+    expect(await getBalanceMicroUsd(t.userId)).toBe(0);
+    expect(await (await decide(b.cookie, id)).json()).toMatchObject({ status: 'approved', duplicate: true });
+    expect(await getBalanceMicroUsd(t.userId)).toBe(6_000_000);
+    await decide(b.cookie, id);
+    expect(await getBalanceMicroUsd(t.userId)).toBe(6_000_000);
+  });
+
+  it('crash after the claim on a role change: approving again applies it, and never overwrites a later change', async () => {
+    const s1 = await superAdmin();
+    const s2 = await superAdmin();
+    const t = await makeUser();
+    const t2 = await makeUser();
+    const id = await promote(s1, t.userId);
+    const id2 = await promote(s1, t2.userId);
+    for (const x of [id, id2]) await getDb().update(adminRequests).set({ status: 'approved', decidedBy: s2.userId, decidedAt: Date.now() }).where(eq(adminRequests.id, x));
+    await setRole(t2.userId, 'support'); // changed after the request
+    await decide(s2.cookie, id);
+    await decide(s2.cookie, id2);
+    expect(await roleOf(t.userId)).toBe('admin');
+    expect(await roleOf(t2.userId)).toBe('support');
+  });
+
+  it('an admin who is admin only through ADMIN_EMAILS cannot be suspended by a plain admin', async () => {
+    const a = await admin();
+    const bossUser = await makeUser({ role: 'customer', email: `${crypto.randomUUID().slice(0, 8)}-boss@example.test` });
+    env.ADMIN_EMAILS = bossUser.email;
+    try {
+      const res = await patch(a.cookie, bossUser.userId, { status: 'suspended' });
+      expect(res.status).toBe(403);
+      expect((await res.json()).code).toBe('super_admin_required');
+    } finally { delete env.ADMIN_EMAILS; }
   });
 });
