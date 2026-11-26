@@ -5,6 +5,7 @@ import { accounts } from '../../../../db/schema';
 import { audit } from '../../../../lib/server/audit';
 import { consumeAuthToken } from '../../../../lib/server/auth';
 import { grantSignupBonus } from '../../../../lib/server/bonus';
+import { signupBonusMicroUsd } from '../../../../lib/server/config';
 import { clientIp, fail, handle, json, parseBody, requireSameOrigin } from '../../../../lib/server/http';
 import { rateLimit } from '../../../../lib/server/ratelimit';
 import { errText } from '../../../../lib/server/redact';
@@ -20,8 +21,8 @@ export const POST = handle(async request => {
   await getDb().update(accounts).set({ emailVerifiedAt: Date.now() }).where(eq(accounts.userId, userId));
   await audit(request, userId, 'auth.email_verified', { type: 'account', id: userId });
   const [acct] = await getDb().select({ email: accounts.email }).from(accounts).where(eq(accounts.userId, userId)).limit(1);
-  // bonus: true = credit added now, false = not added (once per e-mail), null = the check failed.
-  let bonus: boolean | null = false;
+  // bonus: true = credit added now, false = not added (once per e-mail), null = bonus switched off or the check failed.
+  let bonus: boolean | null = signupBonusMicroUsd() > 0 ? false : null;
   try {
     if (acct && (await grantSignupBonus(userId, acct.email))) {
       bonus = true;

@@ -134,4 +134,18 @@ describe('sign-up bonus: once per verified e-mail, no schema change', () => {
     const [row] = await getDb().select().from(accounts).where(eq(accounts.userId, userId));
     expect(row!.emailVerifiedAt).not.toBeNull();
   });
+
+  it('bonus off answers bonus null on verify and reset (page stays silent); bonus on and a second account answers false', async () => {
+    delete env.SIGNUP_BONUS_USD;
+    const off = await signUp('silent@example.test');
+    expect(((await (await verify(off.token)).json()) as { bonus: unknown }).bonus).toBeNull();
+    const offReset = await createAuthToken(off.userId, 'reset_password', 3600_000);
+    const r = await resetPassword(req('/api/auth/reset-password', { method: 'POST', headers: nextIp(), body: { token: offReset, password: 'another-long-password' } }), ctx);
+    expect(((await r.json()) as { bonus: unknown }).bonus).toBeNull();
+    env.SIGNUP_BONUS_USD = '5';
+    const a = await signUp('dup.one@gmail.com');
+    const b = await signUp('dupone+x@gmail.com');
+    expect(((await (await verify(a.token)).json()) as { bonus: unknown }).bonus).toBe(true);
+    expect(((await (await verify(b.token)).json()) as { bonus: unknown }).bonus).toBe(false);
+  });
 });
