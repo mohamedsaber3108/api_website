@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # Clears one admin's MFA from the server terminal (lost phone and no recovery codes) and writes an audit row.
+# The email must belong to a password account (auth_provider 'password'); the database role is not checked, so an
+# admin made only by ADMIN_EMAILS is covered. The lock row is cleared too, so the admin can enrol again at once.
 # The admin enrols again at next sign-in. Takes the same stop/start of the service as create-admin.sh.
 #   sudo bash /opt/wasl/current/deploy/reset-mfa.sh admin@example.com
 set -euo pipefail
@@ -15,21 +17,24 @@ done < <(find /var/lib/wasl -name '*.sqlite' -type f -size +0)
 [[ -n "$db" ]] || { echo "Database not found under /var/lib/wasl" >&2; exit 1; }
 
 # The email matched the regex above, so it holds no quote and is safe inside the SQL string.
-uid=$(sqlite3 "$db" "SELECT user_id FROM accounts WHERE email='$email' AND auth_provider='password' AND role='admin' AND status='active' LIMIT 1;")
-[[ -n "$uid" ]] || { echo "No active admin with that email (role must be admin in the database)." >&2; exit 1; }
+uid=$(sqlite3 "$db" "SELECT user_id FROM accounts WHERE email='$email' AND auth_provider='password' AND status='active' LIMIT 1;")
+[[ -n "$uid" ]] || { echo "No active password account with that email." >&2; exit 1; }
 sqlite3 "$db" "SELECT 1 FROM mfa_credentials LIMIT 1" >/dev/null 2>&1 || { echo "MFA tables not found: has the MFA migration been applied?" >&2; exit 1; }
 
 operator="${SUDO_USER:-root}"
+op_re='^[A-Za-z0-9._-]+$'
+[[ "$operator" =~ $op_re ]] || { echo "invalid operator name" >&2; exit 1; }
 audit_id="mfa-reset-$(date +%s)-$RANDOM"
 now_ms=$(( $(date +%s) * 1000 ))
 
 systemctl stop wasl
 trap 'systemctl start wasl' EXIT
-sqlite3 "$db" <<SQL
+sqlite3 -bail "$db" <<SQL
 BEGIN;
 DELETE FROM mfa_recovery_codes WHERE user_id='$uid';
 DELETE FROM mfa_credentials WHERE user_id='$uid';
 UPDATE sessions SET mfa_verified_at=NULL WHERE user_id='$uid';
+DELETE FROM rate_limit_buckets WHERE key='mfa:fail:$uid';
 INSERT INTO audit_logs (id, actor_id, action, target_type, target_id, meta, ip, created_at)
   VALUES ('$audit_id', NULL, 'auth.mfa_reset', 'account', '$uid', '{"by":"server terminal","operator":"$operator"}', NULL, $now_ms);
 COMMIT;

@@ -42,7 +42,7 @@ export const sessions = sqliteTable('sessions', {
   mfaVerifiedAt: integer('mfa_verified_at'),
 }, t => [index('sessions_user_idx').on(t.userId)]);
 
-/** TOTP secret per admin, AES-GCM encrypted with MFA_ENCRYPTION_KEY. `enrolledAt` is null while enrolment is pending. */
+/** TOTP secret per admin, AES-GCM encrypted with MFA_ENCRYPTION_KEY (user id as additional data). `enrolledAt` is null while enrolment is pending. */
 export const mfaCredentials = sqliteTable('mfa_credentials', {
   userId: text('user_id').primaryKey().references(() => accounts.userId),
   secretEnc: text('secret_enc').notNull(),
@@ -52,7 +52,7 @@ export const mfaCredentials = sqliteTable('mfa_credentials', {
   lastUsedStep: integer('last_used_step'),
 });
 
-/** Single-use recovery codes, stored as SHA-256 only. */
+/** Single-use recovery codes, stored only as HMAC-SHA-256 keyed with MFA_ENCRYPTION_KEY. */
 export const mfaRecoveryCodes = sqliteTable('mfa_recovery_codes', {
   id: text('id').primaryKey(),
   userId: text('user_id').notNull().references(() => accounts.userId),

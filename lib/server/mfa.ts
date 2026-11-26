@@ -4,9 +4,8 @@ import { getDb } from '../../db';
 import { mfaCredentials, mfaRecoveryCodes, sessions } from '../../db/schema';
 import { audit } from './audit';
 import { isProduction } from './config';
-import { fromHex, safeEqual, sha256Hex, toHex } from './crypto';
+import { fromHex, hmacSha256Hex, safeEqual, toHex } from './crypto';
 import { db1, HttpError } from './http';
-import { rateLimit } from './ratelimit';
 
 /** TOTP per RFC 6238 (HMAC-SHA1, 30 s, 6 digits) and admin MFA state. No third-party dependency. */
 
@@ -82,11 +81,12 @@ export function otpauthUrl(email: string, secretB32: string): string {
 // ---- secret encryption (AES-GCM, key derived from MFA_ENCRYPTION_KEY) ----
 
 /** Fails closed: in production a missing key is a 503 so admin routes cannot open. Development uses a fixed local key. */
+const MIN_KEY_LENGTH = 32;
 function keyMaterial(): string {
   const k = (env.MFA_ENCRYPTION_KEY || '').trim();
-  if (k) return k;
-  if (!isProduction()) return 'wasl-development-only-mfa-key';
-  throw new HttpError(503, 'Admin MFA is not configured on this server (MFA_ENCRYPTION_KEY is missing).', 'mfa_not_configured');
+  if (!isProduction()) return k || 'wasl-development-only-mfa-key';
+  if (k.length >= MIN_KEY_LENGTH) return k;
+  throw new HttpError(503, `Admin MFA is not configured on this server (MFA_ENCRYPTION_KEY is missing or shorter than ${MIN_KEY_LENGTH} characters).`, 'mfa_not_configured');
 }
 
 async function aesKey(): Promise<CryptoKey> {
@@ -94,17 +94,18 @@ async function aesKey(): Promise<CryptoKey> {
   return crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['encrypt', 'decrypt']);
 }
 
-export async function encryptSecret(plain: Uint8Array): Promise<string> {
+/** Format `v2.<iv>.<ciphertext>`. The user id is the AES-GCM additional data, so a secret copied to another user's row does not decrypt. */
+export async function encryptSecret(plain: Uint8Array, userId: string): Promise<string> {
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, await aesKey(), plain as BufferSource);
-  return `v1.${toHex(iv)}.${toHex(ct)}`;
+  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: encoder.encode(userId) }, await aesKey(), plain as BufferSource);
+  return `v2.${toHex(iv)}.${toHex(ct)}`;
 }
 
-export async function decryptSecret(stored: string): Promise<Uint8Array> {
+export async function decryptSecret(stored: string, userId: string): Promise<Uint8Array> {
   const [v, iv, ct] = stored.split('.');
-  if (v !== 'v1' || !iv || !ct) throw new HttpError(500, 'Stored MFA secret is unreadable', 'mfa_secret_unreadable');
+  if (v !== 'v2' || !iv || !ct) throw new HttpError(500, 'Stored MFA secret is unreadable', 'mfa_secret_unreadable');
   try {
-    return new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromHex(iv) as BufferSource }, await aesKey(), fromHex(ct) as BufferSource));
+    return new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromHex(iv) as BufferSource, additionalData: encoder.encode(userId) }, await aesKey(), fromHex(ct) as BufferSource));
   } catch {
     throw new HttpError(500, 'Stored MFA secret cannot be decrypted with the current MFA_ENCRYPTION_KEY', 'mfa_secret_unreadable');
   }
@@ -135,18 +136,35 @@ export function assertRecentMfa(p: { mfaVerifiedAt: number | null }, now = Date.
 
 const failKey = (userId: string) => `mfa:fail:${userId}`;
 
+/**
+ * Reserves one try BEFORE the code is checked (one atomic upsert), so parallel guesses cannot pass the limit together.
+ * Try 6 and later in the window get 429. A right code deletes the bucket (clearFailures).
+ * The first blocked request of a window (count = MAX_FAILURES + 1) writes the single `auth.mfa_locked` audit row.
+ */
 async function assertNotLocked(request: Request, userId: string) {
   const now = Date.now();
-  const row = await db1().prepare('SELECT count, window_start FROM rate_limit_buckets WHERE key = ?1').bind(failKey(userId)).first<{ count: number; window_start: number }>();
-  if (row && row.count >= MAX_FAILURES && row.window_start > now - LOCK_SECONDS * 1000) {
+  const row = await db1()
+    .prepare(
+      `INSERT INTO rate_limit_buckets (key, window_start, count) VALUES (?1, ?2, 1)
+       ON CONFLICT(key) DO UPDATE SET
+         count = CASE WHEN window_start < ?3 THEN 1 ELSE count + 1 END,
+         window_start = CASE WHEN window_start < ?3 THEN ?2 ELSE window_start END
+       RETURNING count, window_start`,
+    )
+    .bind(failKey(userId), now, now - LOCK_SECONDS * 1000)
+    .first<{ count: number; window_start: number }>();
+  if (row && row.count > MAX_FAILURES) {
     const retry = Math.max(1, Math.ceil((row.window_start + LOCK_SECONDS * 1000 - now) / 1000));
-    await audit(request, userId, 'auth.mfa_locked', { type: 'account', id: userId });
+    if (row.count === MAX_FAILURES + 1) await audit(request, userId, 'auth.mfa_locked', { type: 'account', id: userId });
     throw new HttpError(429, 'Too many wrong codes. MFA is locked for this account for a while.', 'mfa_locked', { retry_after: retry }, { 'Retry-After': String(retry) });
   }
 }
 
+async function clearFailures(userId: string) {
+  await db1().prepare('DELETE FROM rate_limit_buckets WHERE key = ?1').bind(failKey(userId)).run();
+}
+
 async function recordFailure(request: Request, userId: string, kind: string): Promise<never> {
-  await rateLimit(failKey(userId), MAX_FAILURES, LOCK_SECONDS).catch(() => {});
   await audit(request, userId, 'auth.mfa_verify_failed', { type: 'account', id: userId }, { kind });
   throw new HttpError(401, 'Incorrect code', 'invalid_mfa_code');
 }
@@ -154,6 +172,9 @@ async function recordFailure(request: Request, userId: string, kind: string): Pr
 // ---- recovery codes ----
 
 const normaliseRecovery = (s: string) => s.toUpperCase().replace(/[\s-]/g, '');
+
+/** HMAC-SHA-256 keyed with MFA_ENCRYPTION_KEY: a copy of the table alone is not enough to test guesses offline. */
+const recoveryHash = (code: string) => hmacSha256Hex(keyMaterial(), `wasl-mfa-recovery-v1:${normaliseRecovery(code)}`);
 
 function newRecoveryCode(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(10));
@@ -166,7 +187,7 @@ async function issueRecoveryCodes(userId: string): Promise<string[]> {
   const db = getDb();
   const now = Date.now();
   const codes = Array.from({ length: RECOVERY_CODE_COUNT }, newRecoveryCode);
-  const rows = await Promise.all(codes.map(async c => ({ id: crypto.randomUUID(), userId, hash: await sha256Hex(normaliseRecovery(c)), createdAt: now })));
+  const rows = await Promise.all(codes.map(async c => ({ id: crypto.randomUUID(), userId, hash: await recoveryHash(c), createdAt: now })));
   await db.batch([db.delete(mfaRecoveryCodes).where(eq(mfaRecoveryCodes.userId, userId)), db.insert(mfaRecoveryCodes).values(rows)]);
   return codes;
 }
@@ -179,7 +200,7 @@ async function acceptTotp(userId: string, code: string, requireEnrolled: boolean
   const [row] = await db.select().from(mfaCredentials).where(eq(mfaCredentials.userId, userId)).limit(1);
   if (!row || (requireEnrolled && !row.enrolledAt)) throw new HttpError(409, 'MFA is not set up for this account', 'mfa_not_enrolled');
   if (!/^\d{6}$/.test(code)) return false;
-  const step = await matchTotp(await decryptSecret(row.secretEnc), code);
+  const step = await matchTotp(await decryptSecret(row.secretEnc, userId), code);
   if (step === null) return false;
   const updated = await db
     .update(mfaCredentials)
@@ -190,7 +211,7 @@ async function acceptTotp(userId: string, code: string, requireEnrolled: boolean
 }
 
 async function acceptRecovery(userId: string, code: string): Promise<boolean> {
-  const hash = await sha256Hex(normaliseRecovery(code));
+  const hash = await recoveryHash(code);
   const rows = await getDb()
     .update(mfaRecoveryCodes)
     .set({ usedAt: Date.now() })
@@ -207,7 +228,7 @@ export async function beginEnrolment(request: Request, userId: string, email: st
   keyMaterial();
   if ((await getMfaState(userId)).enrolled) throw new HttpError(409, 'MFA is already set up. Ask a server operator to reset it.', 'mfa_already_enrolled');
   const secret = crypto.getRandomValues(new Uint8Array(20));
-  const secretEnc = await encryptSecret(secret);
+  const secretEnc = await encryptSecret(secret, userId);
   const now = Date.now();
   await getDb().insert(mfaCredentials).values({ userId, secretEnc, createdAt: now }).onConflictDoUpdate({ target: mfaCredentials.userId, set: { secretEnc, createdAt: now, lastUsedStep: null } });
   await audit(request, userId, 'auth.mfa_enrol_started', { type: 'account', id: userId });
@@ -223,6 +244,7 @@ export async function confirmEnrolment(request: Request, p: { userId: string; se
   await getDb().update(mfaCredentials).set({ enrolledAt: Date.now() }).where(eq(mfaCredentials.userId, p.userId));
   const recoveryCodes = await issueRecoveryCodes(p.userId);
   await markSessionVerified(p.sessionId);
+  await clearFailures(p.userId);
   await audit(request, p.userId, 'auth.mfa_enrolled', { type: 'account', id: p.userId });
   return { recoveryCodes };
 }
@@ -240,6 +262,7 @@ export async function verifyStepUp(request: Request, p: { userId: string; sessio
     await audit(request, p.userId, 'auth.mfa_recovery_used', { type: 'account', id: p.userId });
   }
   await markSessionVerified(p.sessionId);
+  await clearFailures(p.userId);
   return { verified: true };
 }
 
@@ -249,6 +272,7 @@ export async function regenerateRecovery(request: Request, p: { userId: string }
   keyMaterial();
   if (!(await acceptTotp(p.userId, code.replace(/\s/g, ''), true))) return recordFailure(request, p.userId, 'regenerate');
   const recoveryCodes = await issueRecoveryCodes(p.userId);
+  await clearFailures(p.userId);
   await audit(request, p.userId, 'auth.mfa_recovery_regenerated', { type: 'account', id: p.userId });
   return { recoveryCodes };
 }

@@ -22,7 +22,7 @@ export async function startDb() {
   }
   env.DB = proxy.env.DB;
   // Admin routes fail closed without this (production mode). Tests that check that behaviour delete it.
-  env.MFA_ENCRYPTION_KEY = 'test-only-mfa-key';
+  env.MFA_ENCRYPTION_KEY = 'test-only-mfa-key-0123456789-abcdefghij';
   return { dispose: () => proxy.dispose() };
 }
 

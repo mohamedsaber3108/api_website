@@ -19,7 +19,7 @@ import * as confirm from '../app/api/auth/mfa/confirm/route';
 import * as recovery from '../app/api/auth/mfa/recovery/route';
 import * as status from '../app/api/auth/mfa/status/route';
 import * as verify from '../app/api/auth/mfa/verify/route';
-import { hashPassword, sha256Hex } from '../lib/server/crypto';
+import { hashPassword, hmacSha256Hex, sha256Hex } from '../lib/server/crypto';
 import { base32Decode, base32Encode, currentStep, decryptSecret, encryptSecret, hotp } from '../lib/server/mfa';
 import { makeUser, newSession, req, startDb } from './helpers/db';
 
@@ -69,13 +69,30 @@ describe('TOTP primitives', () => {
   });
   it('AES-GCM secret: round-trips, differs each time, hides the secret, and fails with another key', async () => {
     const secret = crypto.getRandomValues(new Uint8Array(20));
-    const a = await encryptSecret(secret);
-    expect(a).not.toBe(await encryptSecret(secret));
+    const a = await encryptSecret(secret, 'u_a');
+    expect(a).toMatch(/^v2\./);
+    expect(a).not.toBe(await encryptSecret(secret, 'u_a'));
     expect(a).not.toContain(base32Encode(secret));
-    expect([...(await decryptSecret(a))]).toEqual([...secret]);
-    env.MFA_ENCRYPTION_KEY = 'a-different-key';
-    await expect(decryptSecret(a)).rejects.toMatchObject({ code: 'mfa_secret_unreadable' });
-    env.MFA_ENCRYPTION_KEY = 'test-only-mfa-key';
+    expect([...(await decryptSecret(a, 'u_a'))]).toEqual([...secret]);
+    env.MFA_ENCRYPTION_KEY = 'a-different-key-0123456789-abcdefghijk';
+    await expect(decryptSecret(a, 'u_a')).rejects.toMatchObject({ code: 'mfa_secret_unreadable' });
+    env.MFA_ENCRYPTION_KEY = 'test-only-mfa-key-0123456789-abcdefghij';
+  });
+});
+
+describe('A1: secret bound to the user id', () => {
+  it('a secret copied to another user does not decrypt (primitive and through the API)', async () => {
+    const secret = crypto.getRandomValues(new Uint8Array(20));
+    const enc = await encryptSecret(secret, 'u_a');
+    await expect(decryptSecret(enc, 'u_b')).rejects.toMatchObject({ code: 'mfa_secret_unreadable' });
+    const a = await enrolledAdmin();
+    const b = await enrolledAdmin();
+    const [credA] = await getDb().select().from(mfaCredentials).where(eq(mfaCredentials.userId, a.userId));
+    await getDb().update(mfaCredentials).set({ secretEnc: credA.secretEnc }).where(eq(mfaCredentials.userId, b.userId));
+    // B's row now holds A's secret: A's right code must not open a session for B.
+    const res = await doVerify(await newSession(b.userId), await codeAt(a.secret, 1));
+    expect(res.status).toBe(500);
+    expect((await res.json()).code).toBe('mfa_secret_unreadable');
   });
 });
 
@@ -150,15 +167,15 @@ describe('enrolment', () => {
       expect((await callAdmin(method, path, fn, a.cookie)).status, `${method} ${path}`).not.toBe(403);
     }
   });
-  it('stores the secret encrypted and the recovery codes only as SHA-256', async () => {
+  it('stores the secret encrypted and the recovery codes only as keyed HMAC-SHA-256', async () => {
     const a = await enrolledAdmin();
     const [cred] = await getDb().select().from(mfaCredentials).where(eq(mfaCredentials.userId, a.userId));
-    expect(cred.secretEnc).toMatch(/^v1\.[a-f0-9]{24}\./);
+    expect(cred.secretEnc).toMatch(/^v2\.[a-f0-9]{24}\./);
     expect(cred.secretEnc).not.toContain(a.secret);
     expect(cred.enrolledAt).not.toBeNull();
     const rows = await getDb().select().from(mfaRecoveryCodes).where(eq(mfaRecoveryCodes.userId, a.userId));
     expect(rows).toHaveLength(10);
-    expect(rows.map(r => r.hash).sort()).toEqual(await Promise.all(a.recoveryCodes.map(c => sha256Hex(c.replace('-', '')))).then(x => x.sort()));
+    expect(rows.map(r => r.hash).sort()).toEqual(await Promise.all(a.recoveryCodes.map(c => hmacSha256Hex(env.MFA_ENCRYPTION_KEY as string, `wasl-mfa-recovery-v1:${c.replace('-', '')}`))).then(x => x.sort()));
   });
   it('cannot begin or confirm again once enrolled (409)', async () => {
     const a = await enrolledAdmin();
@@ -214,6 +231,29 @@ describe('verify (step-up)', () => {
     const other = await enrolledAdmin();
     expect((await doVerify(await newSession(other.userId), await codeAt(other.secret, 1))).status).toBe(200);
   });
+  it('R3: parallel wrong codes cannot exceed 5 tries', async () => {
+    const a = await enrolledAdmin();
+    const cookie = await newSession(a.userId);
+    const results = await Promise.all(Array.from({ length: 30 }, () => doVerify(cookie, '000000')));
+    const codes = results.map(r => r.status);
+    expect(codes.filter(c => c === 401)).toHaveLength(5);
+    expect(codes.filter(c => c === 429)).toHaveLength(25);
+    expect((await doVerify(cookie, await codeAt(a.secret, 1))).status).toBe(429);
+  });
+  it('A4: a lock window writes one auth.mfa_locked audit row, however many blocked tries follow', async () => {
+    const a = await enrolledAdmin();
+    const cookie = await newSession(a.userId);
+    for (let i = 0; i < 12; i++) await doVerify(cookie, '000000');
+    const rows = (await getDb().select().from(auditLogs).where(eq(auditLogs.actorId, a.userId))).filter(r => r.action === 'auth.mfa_locked');
+    expect(rows).toHaveLength(1);
+  });
+  it('a right code clears the failure count', async () => {
+    const a = await enrolledAdmin();
+    const cookie = await newSession(a.userId);
+    for (let i = 0; i < 4; i++) await doVerify(cookie, '000000');
+    expect((await doVerify(cookie, await codeAt(a.secret, 1))).status).toBe(200);
+    for (let i = 0; i < 5; i++) expect((await doVerify(cookie, '000000')).status).toBe(401);
+  });
   it('a recovery code works once', async () => {
     const a = await enrolledAdmin();
     const first = await newSession(a.userId);
@@ -267,6 +307,22 @@ describe('credit adjustment needs MFA verified in the last 15 minutes', () => {
   });
 });
 
+describe('A5: a role change ends MFA verification', () => {
+  it('clears mfa_verified_at on the target user\'s sessions', async () => {
+    const admin = await makeUser({ role: 'admin' });
+    const target = await makeUser({ role: 'admin' });
+    const other = await makeUser({ role: 'admin' });
+    const patch = (id: string, role: string) => userById.PATCH(req(`/api/admin/users/${id}`, { method: 'PATCH', cookie: admin.cookie, body: { role } }), { params: Promise.resolve({ id }) });
+    expect((await patch(target.userId, 'customer')).status).toBe(200);
+    const [t] = await getDb().select().from(sessions).where(eq(sessions.userId, target.userId));
+    expect(t.mfaVerifiedAt).toBeNull();
+    const [o] = await getDb().select().from(sessions).where(eq(sessions.userId, other.userId));
+    expect(o.mfaVerifiedAt).not.toBeNull();
+    expect((await patch(target.userId, 'admin')).status).toBe(200);
+    expect((await callAdmin('GET', '/api/admin/users', users.GET, target.cookie)).status).toBe(403); // must verify again
+  });
+});
+
 describe('support and customer are unaffected', () => {
   it('support still reaches staff routes without MFA, and is still refused admin-only routes with forbidden', async () => {
     const s = await makeUser({ role: 'support' });
@@ -295,7 +351,20 @@ describe('fail closed without MFA_ENCRYPTION_KEY', () => {
       // Support staff and customers are not affected by the missing key.
       const s = await makeUser({ role: 'support' });
       expect((await callAdmin('GET', '/api/admin/tickets', tickets.GET, s.cookie)).status).toBe(200);
-    } finally { env.MFA_ENCRYPTION_KEY = 'test-only-mfa-key'; }
+    } finally { env.MFA_ENCRYPTION_KEY = 'test-only-mfa-key-0123456789-abcdefghij'; }
+  });
+  it('R4: in production a key shorter than 32 characters is refused with 503; 32 characters work', async () => {
+    const a = await makeUser({ role: 'admin' });
+    try {
+      for (const short of ['a', 'short-key-1234567890', 'x'.repeat(31), ' '.repeat(10) + 'y'.repeat(20)]) {
+        env.MFA_ENCRYPTION_KEY = short;
+        const res = await callAdmin('GET', '/api/admin/users', users.GET, a.cookie);
+        expect(res.status, short).toBe(503);
+        expect((await res.json()).code).toBe('mfa_not_configured');
+      }
+      env.MFA_ENCRYPTION_KEY = 'x'.repeat(32);
+      expect((await callAdmin('GET', '/api/admin/users', users.GET, a.cookie)).status).toBe(200);
+    } finally { env.MFA_ENCRYPTION_KEY = 'test-only-mfa-key-0123456789-abcdefghij'; }
   });
   it('in development mode a missing key falls back to a local key (so local runs work)', async () => {
     const a = await makeUser({ role: 'admin', mfaVerifiedAt: null });
@@ -303,6 +372,6 @@ describe('fail closed without MFA_ENCRYPTION_KEY', () => {
     env.APP_ENV = 'development';
     try {
       expect((await doBegin(a.cookie)).status).toBe(200);
-    } finally { env.MFA_ENCRYPTION_KEY = 'test-only-mfa-key'; delete env.APP_ENV; }
+    } finally { env.MFA_ENCRYPTION_KEY = 'test-only-mfa-key-0123456789-abcdefghij'; delete env.APP_ENV; }
   });
 });
