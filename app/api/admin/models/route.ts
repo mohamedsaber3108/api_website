@@ -25,6 +25,11 @@ export const PUT = handle(async request => {
   const [old] = await db.select().from(modelConfigs).where(eq(modelConfigs.modelId, body.modelId)).limit(1);
   // Markup changes money: write the audit row first (sensitive), then change.
   await audit(request, admin.userId, 'admin.model_config', { type: 'model', id: body.modelId }, body, { before: old ? { enabled: !!old.enabled, markupPercent: old.markupPercent } : null, after: { enabled: body.enabled, markupPercent: body.markupPercent }, actorRole: admin.role, sensitive: true });
-  await db.insert(modelConfigs).values(values).onConflictDoUpdate({ target: modelConfigs.modelId, set: values });
+  try {
+    await db.insert(modelConfigs).values(values).onConflictDoUpdate({ target: modelConfigs.modelId, set: values });
+  } catch (e) {
+    await audit(request, admin.userId, 'admin.model_update_failed', { type: 'model', id: body.modelId }, undefined, { result: 'failed', reason: e instanceof Error ? e.message.slice(0, 200) : 'update failed', actorRole: admin.role });
+    throw e;
+  }
   return json({ ok: true });
 });

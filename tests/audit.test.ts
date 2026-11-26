@@ -5,7 +5,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { and, asc, eq, isNotNull } from 'drizzle-orm';
 import { env } from 'cloudflare:workers';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import * as audit from '../app/api/admin/audit/route';
 import * as incidents from '../app/api/admin/incidents/route';
 import * as models from '../app/api/admin/models/route';
@@ -215,6 +215,87 @@ describe('a sensitive action fails when its audit row cannot be written', () => 
     expect((await call(requestById.POST, req(`/api/admin/requests/${requestId}`, { method: 'POST', cookie: s2.cookie, body: { action: 'approve', reason: 'checked it' } }), requestId)).status).toBe(200);
     expect(await getBalanceMicroUsd(t2.userId)).toBe(5_000_000);
     expect((await chainOk()).ok).toBe(true);
+  });
+});
+
+describe('fix round 1 (review of PR 7)', () => {
+  it('R1: 20 refused admin calls in a row write one denied row in the window; another route or actor still writes', async () => {
+    const customer = await makeUser();
+    const other = await makeUser();
+    for (let i = 0; i < 20; i++) expect((await call(models.PUT, req('/api/admin/models', { method: 'PUT', cookie: customer.cookie, body: { modelId: 'x/y', enabled: true, markupPercent: 5 } }))).status).toBe(403);
+    const mine = async (id: string) => (await byAction('auth.admin_denied')).filter(r => r.actorId === id);
+    expect(await mine(customer.userId)).toHaveLength(1);
+    expect((await call(audit.GET, req('/api/admin/audit', { cookie: customer.cookie }))).status).toBe(403); // a different route is a different row
+    expect(await mine(customer.userId)).toHaveLength(2);
+    expect((await call(audit.GET, req('/api/admin/audit', { cookie: other.cookie }))).status).toBe(403);
+    expect(await mine(other.userId)).toHaveLength(1);
+    // after the window the same refusal is written again
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 61_000 });
+    try {
+      await call(models.PUT, req('/api/admin/models', { method: 'PUT', cookie: customer.cookie, body: { modelId: 'x/y', enabled: true, markupPercent: 5 } }));
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(await mine(customer.userId)).toHaveLength(3);
+  });
+
+  it('R2: a duplicate approval writes its audit rows before it re-applies, and applies nothing when they cannot be written', async () => {
+    const s = await makeUser({ role: 'super_admin' });
+    const s2 = await makeUser({ role: 'super_admin' });
+    const t = await makeUser();
+    const t2 = await makeUser();
+    const ask = async (target: string) => (await (await call(userById.PATCH, req(`/api/admin/users/${target}`, { method: 'PATCH', cookie: s.cookie, body: { role: 'admin', reason: 'needs the console' } }), target)).json()).requestId as string;
+    const [id, id2] = [await ask(t.userId), await ask(t2.userId)];
+    for (const x of [id, id2]) await getDb().update(adminRequests).set({ status: 'approved', decidedBy: s2.userId, decidedAt: Date.now() }).where(eq(adminRequests.id, x)); // crash after the claim
+    const decide = (rid: string) => call(requestById.POST, req(`/api/admin/requests/${rid}`, { method: 'POST', cookie: s2.cookie, body: { action: 'approve', reason: 'retry after crash' } }), rid);
+    await flag(true);
+    try {
+      expect((await decide(id)).status).toBe(503);
+    } finally {
+      await flag(false);
+    }
+    const role = async (u: string) => (await getDb().select().from(accounts).where(eq(accounts.userId, u)))[0].role;
+    expect(await role(t.userId)).toBe('customer'); // nothing applied
+    expect((await getDb().select().from(adminRequests).where(eq(adminRequests.id, id)))[0].status).toBe('approved'); // not put back to pending
+    expect((await decide(id2)).status).toBe(200);
+    expect(await role(t2.userId)).toBe('admin');
+    const approved = (await byAction('admin.request_approved')).filter(r => r.targetId === t2.userId);
+    expect(approved).toEqual([expect.objectContaining({ result: 'success', actorId: s2.userId })]);
+    expect(JSON.parse(approved[0].meta!)).toMatchObject({ requestId: id2, duplicate: true });
+    expect((await byAction('admin.user_updated')).filter(r => r.targetId === t2.userId && JSON.parse(r.meta!).duplicate === true)).toHaveLength(1);
+    expect((await chainOk()).ok).toBe(true);
+  });
+
+  it('R3: a failed model update writes admin.model_update_failed after the intent row', async () => {
+    const s = await makeUser({ role: 'super_admin' });
+    const d = env.DB as D1Database;
+    await d.prepare('CREATE TABLE test_model_flag (on_ integer)').run();
+    await d.prepare('INSERT INTO test_model_flag VALUES (1)').run();
+    await d.prepare("CREATE TRIGGER test_model_fail BEFORE INSERT ON model_configs WHEN (SELECT on_ FROM test_model_flag) = 1 BEGIN SELECT RAISE(ABORT, 'simulated model failure'); END").run();
+    try {
+      expect((await putModel(s.cookie, { modelId: 'x/fails-model', enabled: true, markupPercent: 7 })).status).toBeGreaterThanOrEqual(500);
+    } finally {
+      await d.prepare('UPDATE test_model_flag SET on_ = 0').run();
+    }
+    expect(await getDb().select().from(modelConfigs).where(eq(modelConfigs.modelId, 'x/fails-model'))).toHaveLength(0);
+    const intent = (await byAction('admin.model_config')).filter(r => r.targetId === 'x/fails-model');
+    const failed = (await byAction('admin.model_update_failed')).filter(r => r.targetId === 'x/fails-model');
+    expect(intent).toHaveLength(1);
+    expect(failed).toEqual([expect.objectContaining({ result: 'failed', actorId: s.userId })]);
+    expect(failed[0].seq!).toBeGreaterThan(intent[0].seq!);
+  });
+
+  it('redacts a JWT and a base32 secret under a neutral key, and keeps ordinary text', () => {
+    const out = redact({ value: 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdEFGH', other: 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP', plain: 'Credit for the March outage' });
+    expect(JSON.stringify(out)).not.toMatch(/eyJ|JBSWY/);
+    expect(out.plain).toBe('Credit for the March outage');
+  });
+
+  it('the verifier lists unhashed rows after the chain start by id and action', async () => {
+    const f = { seq: 1, id: 'c1', actorId: null, actorRole: null, action: 'a.b', targetType: null, targetId: null, meta: null, before: null, after: null, reason: null, result: 'success', ip: null, createdAt: 5000, prevHash: GENESIS };
+    const hash = await chainHash(f);
+    const v = await verifyChain([{ ...f, hash }, { id: 'u1', action: 'ops.mfa_reset', createdAt: 6000 }]);
+    expect(v).toMatchObject({ ok: true, unhashedAfterChainStart: 1, unhashedAfterList: [{ id: 'u1', action: 'ops.mfa_reset' }] });
   });
 });
 

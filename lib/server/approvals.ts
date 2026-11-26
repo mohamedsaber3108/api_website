@@ -199,8 +199,20 @@ export async function decideRequest(request: Request, actor: Actor, id: string, 
       // A crash after the claim leaves "approved" with nothing applied. Only the same approver, within a short window, may re-apply.
       // Anyone else, or a later retry, changes nothing (a role change must never be re-granted after a later demotion).
       if (action === 'approve' && cur.decidedBy === actor.userId && cur.decidedAt !== null && now - cur.decidedAt < REAPPLY_WINDOW_MS) {
-        await applyRequest(cur, actor);
-        await audit(request, actor.userId, 'admin.request_reapplied', { type: 'account', id: cur.targetUserId }, { requestId: id, kind: cur.kind });
+        const dupTarget = { type: 'account', id: cur.targetUserId };
+        const dp = JSON.parse(cur.payload) as Record<string, unknown>;
+        // Write-ahead, as for a first approval: if the rows cannot be written (503) nothing is applied. The request stays
+        // approved (it must not go back to pending: that would let any approver apply it), and the same approver may retry in the window.
+        await audit(request, actor.userId, 'admin.request_approved', dupTarget, { requestId: id, kind: cur.kind, requestedBy: cur.requestedBy, duplicate: true, ...dp }, { reason, actorRole: actor.role, after: { status: next }, sensitive: true });
+        if (cur.kind === 'credit_adjustment') await audit(request, actor.userId, 'admin.credit_adjustment', dupTarget, { amountUsd: dp.amountUsd, note: dp.note, requestId: id, duplicate: true }, { reason, actorRole: actor.role, after: { amountUsd: dp.amountUsd }, sensitive: true });
+        else await audit(request, actor.userId, 'admin.user_updated', dupTarget, { role: dp.role, requestId: id, duplicate: true }, { reason, actorRole: actor.role, before: { role: dp.from }, after: { role: dp.role }, sensitive: true });
+        try {
+          await applyRequest(cur, actor);
+        } catch (e) {
+          await audit(request, actor.userId, 'admin.request_apply_failed', dupTarget, { requestId: id, kind: cur.kind, duplicate: true }, { result: 'failed', reason: e instanceof Error ? e.message.slice(0, 200) : 'apply failed', actorRole: actor.role });
+          throw e;
+        }
+        await audit(request, actor.userId, 'admin.request_reapplied', dupTarget, { requestId: id, kind: cur.kind });
       }
       return { status: next, duplicate: true };
     }

@@ -1,7 +1,7 @@
 import { and, eq, gt, isNull } from 'drizzle-orm';
 import { getDb } from '../../db';
 import { accounts, authTokens, sessions } from '../../db/schema';
-import { audit, auditDenied } from './audit';
+import { audit, auditDeniedOnce } from './audit';
 import { adminEmails, adminEmailsBreakGlass, features, SESSION_COOKIE, SESSION_TTL_MS } from './config';
 import { randomHex, sha256Hex } from './crypto';
 import { clientIp, cookieHeader, HttpError, readCookie } from './http';
@@ -132,8 +132,8 @@ export async function requireRole(request: Request, ...roles: Role[]): Promise<P
   const path = new URL(request.url).pathname;
   if (!roles.includes(p.role) && !(p.role === 'super_admin' && roles.includes('admin'))) {
     // A signed-in person tried an admin or staff route they may not use. (Not signed in = 401, not written: no actor to record.)
-    // shortcut: no rate limit on these rows, so a customer hammering an admin URL grows the log; add a per-actor cap if that happens.
-    await auditDenied(request, p.userId, 'auth.admin_denied', { type: 'route', id: path }, 'role_not_allowed', { actorRole: p.role });
+    // One row per actor, route and reason per 60 seconds, so a customer hammering an admin URL cannot flood the log.
+    await auditDeniedOnce(request, p.userId, 'auth.admin_denied', { type: 'route', id: path }, 'role_not_allowed', { actorRole: p.role });
     throw new HttpError(403, 'Forbidden', 'forbidden');
   }
   // Admins also need an MFA-verified session. Support staff are not required yet (SEC-3b).
@@ -141,7 +141,7 @@ export async function requireRole(request: Request, ...roles: Role[]): Promise<P
     try {
       await assertAdminMfa(p);
     } catch (e) {
-      if (e instanceof HttpError && e.code === 'mfa_required') await auditDenied(request, p.userId, 'auth.admin_denied', { type: 'route', id: path }, 'mfa_required', { actorRole: p.role });
+      if (e instanceof HttpError && e.code === 'mfa_required') await auditDeniedOnce(request, p.userId, 'auth.admin_denied', { type: 'route', id: path }, 'mfa_required', { actorRole: p.role });
       throw e;
     }
   }

@@ -15,10 +15,14 @@ Rows added outside the app (for example by `deploy/reset-mfa.sh`, which has no h
 
 ## Which actions fail without an audit row
 Sensitive: role change, suspension, approval of a request, request creation, credit adjustment (through approval), model markup. The audit row is written **first**; if that fails the action returns 503 `audit_unavailable` and nothing changes (an approval claim is put back to pending). If the change then fails, a row with result `failed` follows.
+A `success` row written first means intent: the change follows, and if it does not apply, a `failed` row follows it. A model markup that fails to save writes `admin.model_update_failed`. A repeated approval that re-applies a change (same approver, within 15 minutes) writes its own `admin.request_approved` row (meta `duplicate: true`) and the action row before it applies; if those rows cannot be written nothing is applied and the request stays approved.
+If an approval writes its first audit row and the second write then fails, that one row stays and no compensating row can be written (the log is down). The claim is put back to pending, so the request can be approved again.
 Everything else (login, tickets, incidents, keys) keeps the old behaviour: a failed audit write is logged (error text only) and the action goes on.
 
 ## Denied attempts
 `auth.admin_denied` (signed-in user without the role, or an admin without MFA), `admin.request_denied` (self-approval, own account, wrong role, stale MFA), `admin.user_update_denied`, `admin.request_rejected` with reason `stale`, `auth.mfa_verify_failed` and `auth.mfa_locked` (result `denied`).
+
+`auth.admin_denied` is written at most once per actor, route and reason in 60 seconds, so looping on an admin URL cannot flood the log. The skipped attempts are not counted.
 
 ## Verify
 Run on a COPY of the database file, never the live one:

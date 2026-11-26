@@ -1,4 +1,4 @@
-import { desc, isNotNull } from 'drizzle-orm';
+import { and, desc, eq, gte, isNotNull } from 'drizzle-orm';
 import { getDb } from '../../db';
 import { auditLogs } from '../../db/schema';
 import { chainHash, GENESIS, redact } from '../audit-chain.mjs';
@@ -75,4 +75,22 @@ export async function audit(request: Request | null, actorId: string | null, act
 /** Writes a `denied` row for a refused attempt. Never throws. */
 export function auditDenied(request: Request | null, actorId: string | null, action: string, target?: { type?: string; id?: string }, reason?: string, extra: Omit<AuditExtra, 'result' | 'sensitive' | 'reason'> = {}) {
   return audit(request, actorId, action, target, undefined, { ...extra, reason, result: 'denied' });
+}
+
+export const DENIED_WINDOW_MS = 60_000;
+
+/**
+ * Like auditDenied, but skips the write when the same actor, action, target and reason already has a row in the last 60 seconds,
+ * so a signed-in customer looping on an admin URL cannot flood the chain. Never throws.
+ * shortcut: the skipped attempts are not counted anywhere; add a counter in the next row's meta if the owner wants one.
+ */
+export async function auditDeniedOnce(request: Request | null, actorId: string, action: string, target: { type: string; id: string }, reason: string, extra: Omit<AuditExtra, 'result' | 'sensitive' | 'reason'> = {}) {
+  try {
+    const [recent] = await getDb().select({ id: auditLogs.id }).from(auditLogs)
+      .where(and(eq(auditLogs.actorId, actorId), eq(auditLogs.action, action), eq(auditLogs.targetId, target.id), eq(auditLogs.reason, reason), gte(auditLogs.createdAt, Date.now() - DENIED_WINDOW_MS))).limit(1);
+    if (recent) return;
+  } catch (e) {
+    console.error('audit throttle check failed', action, errorText(e));
+  }
+  await auditDenied(request, actorId, action, target, reason, extra);
 }

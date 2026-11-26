@@ -25,6 +25,8 @@ const r = await verifyChain(rows);
 if (r.ok) {
   console.log(`OK: ${r.checked} chained rows intact${r.tail ? ` (last seq ${r.tail.seq}, hash ${r.tail.hash})` : ''}.`);
   console.log(`Rows before the chain started (no hash, not checked): ${r.unhashedBeforeChain}. Unhashed rows after it started (e.g. written by deploy/reset-mfa.sh): ${r.unhashedAfterChainStart}.`);
+  // Check each of these by hand: the only expected ones come from deploy/reset-mfa.sh.
+  for (const u of r.unhashedAfterList) console.log(`  unhashed after chain start: id ${u.id} action ${u.action}`);
   process.exit(0);
 }
 console.error(`BROKEN at seq ${r.firstBroken.seq} (row ${r.firstBroken.id}): ${r.firstBroken.reason}. ${r.checked} rows before it were intact.`);
