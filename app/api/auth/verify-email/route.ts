@@ -4,6 +4,7 @@ import { getDb } from '../../../../db';
 import { accounts } from '../../../../db/schema';
 import { audit } from '../../../../lib/server/audit';
 import { consumeAuthToken } from '../../../../lib/server/auth';
+import { grantSignupBonus } from '../../../../lib/server/bonus';
 import { clientIp, fail, handle, json, parseBody, requireSameOrigin } from '../../../../lib/server/http';
 import { rateLimit } from '../../../../lib/server/ratelimit';
 
@@ -17,5 +18,10 @@ export const POST = handle(async request => {
   if (!userId) return fail(400, 'This verification link is invalid or has expired', 'invalid_token');
   await getDb().update(accounts).set({ emailVerifiedAt: Date.now() }).where(eq(accounts.userId, userId));
   await audit(request, userId, 'auth.email_verified', { type: 'account', id: userId });
+  const [acct] = await getDb().select({ email: accounts.email }).from(accounts).where(eq(accounts.userId, userId)).limit(1);
+  if (acct && (await grantSignupBonus(userId, acct.email))) {
+    // Metric: bonus count per e-mail domain (domains only, no addresses), so disposable-domain use can be counted later.
+    await audit(request, userId, 'auth.signup_bonus', { type: 'account', id: userId }, { domain: acct.email.split('@')[1] });
+  }
   return json({ ok: true });
 });

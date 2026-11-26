@@ -4,6 +4,7 @@ import { getDb } from '../../../../db';
 import { accounts, sessions } from '../../../../db/schema';
 import { audit } from '../../../../lib/server/audit';
 import { consumeAuthToken } from '../../../../lib/server/auth';
+import { grantSignupBonus } from '../../../../lib/server/bonus';
 import { hashPassword } from '../../../../lib/server/crypto';
 import { clientIp, fail, handle, json, parseBody, passwordSchema, requireSameOrigin } from '../../../../lib/server/http';
 import { rateLimit } from '../../../../lib/server/ratelimit';
@@ -23,5 +24,7 @@ export const POST = handle(async request => {
     db.delete(sessions).where(eq(sessions.userId, userId)),
   ]);
   await audit(request, userId, 'auth.password_reset', { type: 'account', id: userId });
+  const [acct] = await db.select({ email: accounts.email }).from(accounts).where(eq(accounts.userId, userId)).limit(1);
+  if (acct) await grantSignupBonus(userId, acct.email);
   return json({ ok: true });
 });

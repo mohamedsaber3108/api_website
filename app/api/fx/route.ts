@@ -1,10 +1,15 @@
 import snapshot from '../../../data/fx-snapshot.json';
+import { publicLimit } from '../../../lib/server/ratelimit';
 
 export const dynamic = 'force-dynamic';
 let cache: { at: number; value: unknown } | null = null;
 const currencies = ['USD', 'EGP', 'SAR', 'AED', 'EUR'] as const;
 
-export async function GET() {
+export async function GET(request?: Request) {
+  if (request) {
+    const limited = await publicLimit(request, 'fx', 60, 60);
+    if (limited) return limited;
+  }
   if (cache && Date.now() - cache.at < 86_400_000) return Response.json(cache.value, { headers: { 'Cache-Control': 'public, max-age=3600' } });
   try {
     const response = await fetch('https://open.er-api.com/v6/latest/USD', { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(25000) });

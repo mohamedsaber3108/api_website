@@ -2,9 +2,12 @@ import snapshot from '../../../../../data/catalog-snapshot.json';
 import fxSnapshot from '../../../../../data/fx-snapshot.json';
 import { GET as getCatalog } from '../../../catalog/route';
 import { GET as getFx } from '../../../fx/route';
+import { publicLimit } from '../../../../../lib/server/ratelimit';
 
 export const dynamic='force-dynamic';
 export async function GET(request:Request){
+  const limited=await publicLimit(request,'estimate',60,60,{'Access-Control-Allow-Origin':'*'});
+  if(limited)return limited;
   const url=new URL(request.url);
   const modelId=url.searchParams.get('model')||'';
   const currency=(url.searchParams.get('currency')||'USD').toUpperCase();
