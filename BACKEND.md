@@ -14,6 +14,16 @@ Cloudflare Worker (Vinext) + D1 (Drizzle). All money is integer micro-USD; the b
    Production: `wrangler secret put OPENROUTER_API_KEY` (and the Stripe/Resend secrets); non-secrets as `[vars]`.
 5. Smoke test (local, APP_ENV=development): `node scripts/smoke-test.mjs http://127.0.0.1:8799 you@example.com`
 
+## Tests
+
+`pnpm test` runs the unit and route tests (vitest, plain Node 22). Run one file with `pnpm exec vitest run tests/billing.test.ts`.
+
+- Database: a local in-memory D1 (real SQLite in the Workers runtime, started through wrangler's `getPlatformProxy`). All `drizzle/*.sql` migrations are applied first. No live database is used.
+- `cloudflare:workers` is aliased to `tests/helpers/cloudflare-workers.ts` (see `vitest.config.ts`); tests set secrets and flags on that `env` object.
+- Stripe and the model provider are stubbed with `vi.stubGlobal('fetch', ...)`. No real key and no network call.
+- Covered: password hash, sessions, API keys, ledger idempotency, Stripe signature, webhook replay, refunds, `chargeMicro`, the 15 admin handlers (401 and 403), error codes, checkout. Tests named `FINDING:` pin a known defect; when the defect is fixed, update that test.
+- Start-up cost is about 1 second per test file; files run one after another.
+
 ## Turning features on
 
 | Feature | Required variables |
