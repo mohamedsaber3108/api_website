@@ -4,6 +4,7 @@ import { getDb } from '../../../../../../db';
 import { accounts } from '../../../../../../db/schema';
 import { audit } from '../../../../../../lib/server/audit';
 import { requireRole } from '../../../../../../lib/server/auth';
+import { assertRecentMfa } from '../../../../../../lib/server/mfa';
 import { fail, handle, json, parseBody, requireSameOrigin } from '../../../../../../lib/server/http';
 import { addLedgerEntry, getBalanceMicroUsd } from '../../../../../../lib/server/ledger';
 
@@ -13,6 +14,7 @@ export const dynamic = 'force-dynamic';
 export const POST = handle<{ id: string }>(async (request, ctx) => {
   requireSameOrigin(request);
   const admin = await requireRole(request, 'admin');
+  assertRecentMfa(admin); // money: MFA must have been verified in the last 15 minutes
   const { id } = await ctx.params;
   const body = await parseBody(request, z.object({ amountUsd: z.number().min(-1000).max(1000).refine(v => v !== 0, 'must not be zero'), note: z.string().trim().min(3).max(200), requestKey: z.string().max(80).optional() }));
   const db = getDb();

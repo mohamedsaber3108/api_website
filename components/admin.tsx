@@ -1,7 +1,8 @@
 'use client';
 import { useCallback, useEffect, useState } from 'react';
 import { Activity, Cpu, FileClock, LayoutDashboard, LifeBuoy, Users } from 'lucide-react';
-import { api, errorMessage, usd, type SessionInfo } from '../lib/client-api';
+import { api, ApiError, errorMessage, usd, type SessionInfo } from '../lib/client-api';
+import MfaPanel from './mfa';
 
 type Tab = 'overview' | 'users' | 'tickets' | 'models' | 'incidents' | 'audit';
 type Overview = { users: { total: number; last30Days: number }; activeKeys: number; openTickets: number; revenueLast30DaysMinor: number; usageLast30Days: { requests: number; billedMicroUsd: number; providerMicroUsd: number }; customerCreditsOutstandingMicroUsd: number; recentSignups: { id: string; email: string; name: string | null; createdAt: number }[] };
@@ -17,6 +18,11 @@ export default function AdminConsole({ lang, session }: { lang: 'ar' | 'en'; ses
   const tr = (a: string, e: string) => (ar ? a : e);
   const isAdmin = session.user?.role === 'admin';
   const [tab, setTab] = useState<Tab>(isAdmin ? 'overview' : 'tickets');
+  // Admins must pass MFA before any admin data loads; support staff are not required yet.
+  const [mfa, setMfa] = useState<'checking' | 'ok' | 'need'>(isAdmin ? 'checking' : 'ok');
+  const [mfaReason, setMfaReason] = useState('');
+  useEffect(() => { if (isAdmin) api<{ verified: boolean }>('/api/auth/mfa/status').then(s => setMfa(s.verified ? 'ok' : 'need')).catch(() => setMfa('need')); }, [isAdmin]);
+  const stepUp = () => { setMfaReason(tr('لتعديل الرصيد أدخل رمزًا جديدًا (صالح ١٥ دقيقة).', 'To change credit, enter a fresh code (valid for 15 minutes).')); setMfa('need'); };
   const fmt = (t: number) => new Date(t).toLocaleString(ar ? 'ar-EG' : 'en-US', { dateStyle: 'medium', timeStyle: 'short' });
   const tabs: { id: Tab; icon: typeof Users; label: string; admin: boolean }[] = [
     { id: 'overview', icon: LayoutDashboard, label: tr('نظرة عامة', 'Overview'), admin: false },
@@ -26,11 +32,13 @@ export default function AdminConsole({ lang, session }: { lang: 'ar' | 'en'; ses
     { id: 'incidents', icon: Activity, label: tr('الحوادث', 'Incidents'), admin: false },
     { id: 'audit', icon: FileClock, label: tr('سجل التدقيق', 'Audit log'), admin: true },
   ];
+  if (mfa !== 'ok') return <main className="inner-page"><section className="page-heading section"><span className="section-kicker">WASL / ADMIN</span><h1>{tr('لوحة الإدارة', 'Admin console')}</h1><div className="page-heading-art">◈</div></section>
+    <section className="section">{mfa === 'checking' ? <p className="muted">…</p> : <MfaPanel tr={tr} reason={mfaReason} onVerified={() => { setMfaReason(''); setMfa('ok'); }} />}</section></main>;
   return <main className="inner-page"><section className="page-heading section"><span className="section-kicker">WASL / ADMIN</span><h1>{tr('لوحة الإدارة', 'Admin console')}</h1><div className="page-heading-art">◈</div></section>
     <section className="section dashboard-app"><aside className="dash-nav">{tabs.filter(t => isAdmin || !t.admin).map(t => <button key={t.id} className={tab === t.id ? 'dash-selected' : ''} onClick={() => setTab(t.id)}><t.icon size={18} />{t.label}</button>)}</aside>
       <div className="dash-body">
         {tab === 'overview' && <OverviewTab tr={tr} fmt={fmt} />}
-        {tab === 'users' && <UsersTab tr={tr} fmt={fmt} />}
+        {tab === 'users' && <UsersTab tr={tr} fmt={fmt} onStepUp={stepUp} />}
         {tab === 'tickets' && <TicketsTab tr={tr} fmt={fmt} />}
         {tab === 'models' && <ModelsTab tr={tr} fmt={fmt} />}
         {tab === 'incidents' && <IncidentsTab tr={tr} fmt={fmt} canEdit={isAdmin} />}
@@ -57,7 +65,7 @@ function OverviewTab({ tr, fmt }: P) {
   </div><div className="dash-panel"><h3>{tr('أحدث التسجيلات', 'Recent sign-ups')}</h3><div className="rows">{o.recentSignups.map(u => <div key={u.id}><span><b>{u.name || u.email}</b><small>{u.email} · {fmt(u.createdAt)}</small></span></div>)}</div></div></>;
 }
 
-function UsersTab({ tr, fmt }: P) {
+function UsersTab({ tr, fmt, onStepUp }: P & { onStepUp: () => void }) {
   const [q, setQ] = useState('');
   const [users, setUsers] = useState<User[]>([]);
   const [error, setError] = useState('');
@@ -72,7 +80,7 @@ function UsersTab({ tr, fmt }: P) {
         <select aria-label="role" value={u.role} disabled={u.status === 'deleted'} onChange={e => patch(u.id, { role: e.target.value })}><option>customer</option><option>support</option><option>admin</option></select>
         {u.status !== 'deleted' && <button className="pill-link" onClick={() => { if (confirm(u.status === 'active' ? tr('إيقاف الحساب وإلغاء مفاتيحه؟', 'Suspend this account and revoke its keys?') : tr('إعادة التفعيل؟', 'Reactivate?'))) patch(u.id, { status: u.status === 'active' ? 'suspended' : 'active' }); }}>{u.status}</button>}
         <button className="pill-link" onClick={() => setCredit({ id: u.id, amount: '', note: '' })}>{tr('رصيد', 'Credit')}</button></span>
-      {credit?.id === u.id && <form className="form-row" onSubmit={async e => { e.preventDefault(); try { await api(`/api/admin/users/${u.id}/credits`, { method: 'POST', body: { amountUsd: Number(credit.amount), note: credit.note, requestKey: crypto.randomUUID() } }); setCredit(null); await load(); } catch (err) { setError(errorMessage(err)); } }}>
+      {credit?.id === u.id && <form className="form-row" onSubmit={async e => { e.preventDefault(); try { await api(`/api/admin/users/${u.id}/credits`, { method: 'POST', body: { amountUsd: Number(credit.amount), note: credit.note, requestKey: crypto.randomUUID() } }); setCredit(null); await load(); } catch (err) { if (err instanceof ApiError && (err.code === 'mfa_recent_required' || err.code === 'mfa_required')) onStepUp(); else setError(errorMessage(err)); } }}>
         <input type="number" step="0.01" required placeholder="USD (+/-)" value={credit.amount} onChange={e => setCredit({ ...credit, amount: e.target.value })} /><input required minLength={3} placeholder={tr('السبب', 'Reason')} value={credit.note} onChange={e => setCredit({ ...credit, note: e.target.value })} /><button className="button-dark">{tr('تطبيق', 'Apply')}</button><button type="button" className="link" onClick={() => setCredit(null)}>×</button></form>}</div>)}</div></div>;
 }
 

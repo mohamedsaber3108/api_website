@@ -1,0 +1,14 @@
+import { z } from 'zod';
+import { requireAdminSession } from '../../../../../lib/server/auth';
+import { handle, json, parseBody, requireSameOrigin } from '../../../../../lib/server/http';
+import { confirmEnrolment } from '../../../../../lib/server/mfa';
+
+export const dynamic = 'force-dynamic';
+
+/** Confirms enrolment with the first code. The 10 recovery codes are returned once. */
+export const POST = handle(async request => {
+  requireSameOrigin(request);
+  const p = await requireAdminSession(request);
+  const { code } = await parseBody(request, z.object({ code: z.string().trim().min(6).max(6) }));
+  return json(await confirmEnrolment(request, p, code));
+});

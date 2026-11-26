@@ -20,6 +20,10 @@ TRUST_CHATGPT_HEADERS=false
 # Behind your own reverse proxy (EC2 + Caddy): header with the real client IP, used for rate limits.
 # Leave empty on Cloudflare (cf-connecting-ip is used). Only set it if the proxy always overwrites the header.
 CLIENT_IP_HEADER=
+# Secret that encrypts admin MFA (TOTP) secrets. Required in production (admin routes refuse to open
+# without it). Make it on the server, e.g. `openssl rand -hex 32`. Never commit a value. Losing it means
+# every admin must enrol again. In APP_ENV=development an empty value uses a fixed local key.
+MFA_ENCRYPTION_KEY=
 # Optional free credit for new accounts (USD).
 SIGNUP_BONUS_USD=0
 
