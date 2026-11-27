@@ -137,9 +137,7 @@ cat > /etc/caddy/Caddyfile <<'EOF'
 		X-Content-Type-Options nosniff
 		Referrer-Policy strict-origin-when-cross-origin
 		X-Frame-Options DENY
-		# Same policy as lib/server/security-headers.ts. Report-only until the inline bootstrap
-		# scripts get a nonce; then rename to Content-Security-Policy and drop 'unsafe-inline' from script-src.
-		Content-Security-Policy-Report-Only "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+		# The CSP is sent only by the app (lib/server/security-headers.ts), so there is one copy.
 		# HSTS: add ONLY after the site is served over HTTPS (SEC-5a, blocked on the domain). The app
 		# already sends it when a request is HTTPS, so it is not repeated here.
 		-Server

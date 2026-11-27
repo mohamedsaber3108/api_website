@@ -61,3 +61,37 @@ describe('security headers', () => {
     expect(own.headers.get(CSP_HEADER_NAME)).toBeNull();
   });
 });
+
+describe('withSecurityHeaders keeps the rest of the response', () => {
+  const req = new Request('https://example.test/');
+
+  it('keeps two Set-Cookie values', () => {
+    const res = new Response('x');
+    res.headers.append('Set-Cookie', 'a=1; Path=/; HttpOnly');
+    res.headers.append('Set-Cookie', 'b=2; Path=/; Secure');
+    const out = withSecurityHeaders(req, res);
+    expect(out.headers.getSetCookie()).toEqual(['a=1; Path=/; HttpOnly', 'b=2; Path=/; Secure']);
+  });
+  it('keeps status, statusText and Location', () => {
+    const redirect = withSecurityHeaders(req, new Response(null, { status: 302, headers: { Location: '/next' } }));
+    expect(redirect.status).toBe(302);
+    expect(redirect.headers.get('Location')).toBe('/next');
+    const missing = withSecurityHeaders(req, new Response('no', { status: 404, statusText: 'Gone Fishing' }));
+    expect(missing.status).toBe(404);
+    expect(missing.statusText).toBe('Gone Fishing');
+  });
+  it('passes a stream body through without reading or locking it', async () => {
+    const body = new ReadableStream<Uint8Array>({
+      start(c) {
+        c.enqueue(new TextEncoder().encode('chunk-1'));
+        c.close();
+      },
+    });
+    const res = new Response(body);
+    const out = withSecurityHeaders(req, res);
+    expect(out.body).toBeInstanceOf(ReadableStream);
+    expect(out.body!.locked).toBe(false);
+    const first = await out.body!.getReader().read();
+    expect(new TextDecoder().decode(first.value)).toBe('chunk-1');
+  });
+});
