@@ -1,4 +1,5 @@
 import { discardBody } from '../../../../lib/server/http';
+import { publicLimit } from '../../../../lib/server/ratelimit';
 export const dynamic = 'force-dynamic';
 
 export async function POST(request: Request) {
@@ -7,6 +8,9 @@ export async function POST(request: Request) {
 async function handleTry(request: Request) {
   const origin = request.headers.get('origin');
   if (origin) { try {if (new URL(origin).host !== new URL(request.url).host) return Response.json({error:'Cross-origin requests are not allowed.'},{status:403});} catch {return Response.json({error:'Invalid origin.'},{status:403});} }
+  // Unauthenticated and relays provider calls of up to 45 s: 5 per minute and 40 per hour per IP.
+  const limited = (await publicLimit(request, 'try-min', 5, 60)) ?? (await publicLimit(request, 'try-hour', 40, 3600));
+  if (limited) return limited;
   if (Number(request.headers.get('content-length')||0)>16000) return Response.json({error:'Request too large.'},{status:413});
   const key = request.headers.get('authorization')?.match(/^Bearer (sk-or-[A-Za-z0-9_-]{8,})$/)?.[1];
   if (!key) return Response.json({error:'Provide an OpenRouter API key in the Authorization header.'},{status:401});

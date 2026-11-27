@@ -29,6 +29,20 @@ export function usd(micro: number, digits = 2): string {
   return `$${(micro / 1_000_000).toFixed(digits)}`;
 }
 
-export function errorMessage(e: unknown): string {
+/**
+ * One-language 429 text. The server sends "English | Arabic" for API users; people see only the page language.
+ * The seconds sit inside U+2068 ... U+2069 (an isolate, the plain-text form of <bdi>) so the number keeps its place in Arabic text.
+ */
+export function rateLimitedText(seconds: number, lang: 'ar' | 'en'): string {
+  const s = Math.max(1, Math.ceil(Number(seconds) || 1));
+  return lang === 'ar' ? `طلبات كثيرة. انتظر \u2068${s}\u2069 ثانية ثم حاول مرة أخرى.` : `Too many requests. Please wait \u2068${s}\u2069 seconds and try again.`;
+}
+
+function pageLang(): 'ar' | 'en' {
+  return typeof document !== 'undefined' && document.documentElement.lang === 'en' ? 'en' : 'ar';
+}
+
+export function errorMessage(e: unknown, lang: 'ar' | 'en' = pageLang()): string {
+  if (e instanceof ApiError && e.code === 'rate_limited') return rateLimitedText((e.data as { retry_after?: number } | null)?.retry_after ?? 1, lang);
   return e instanceof Error ? e.message : String(e);
 }

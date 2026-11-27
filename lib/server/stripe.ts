@@ -1,6 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { hmacSha256Hex, safeEqual } from './crypto';
 import { HttpError } from './http';
+import { redact } from './redact';
 
 export type StripeCheckoutInput = {
   paymentId: string;
@@ -33,7 +34,7 @@ export async function createStripeCheckout(input: StripeCheckoutInput): Promise<
   });
   const payload = (await res.json().catch(() => ({}))) as { id?: string; url?: string; error?: { message?: string } };
   if (!res.ok || !payload.id || !payload.url) {
-    console.error('stripe checkout failed', res.status, payload.error?.message);
+    console.error('stripe checkout failed', res.status, redact(String(payload.error?.message ?? '')));
     throw new HttpError(502, 'Could not start checkout. Please try again.', 'checkout_failed');
   }
   return { id: payload.id, url: payload.url };
