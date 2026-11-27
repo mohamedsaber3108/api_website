@@ -13,7 +13,8 @@ import Dashboard from "../components/dashboard";
 import AdminConsole from "../components/admin";
 import Legal, { LEGAL_PAGES, legalTitle, type LegalPage } from "../components/legal";
 import { api, type SessionInfo } from "../lib/client-api";
-import { CustomerSupport, StatusCenter, TrustCenter, UseCases } from "../components/customer-center";
+import { CustomerSupport, TrustCenter, UseCases } from "../components/customer-center";
+import { StatusCenter } from "../components/status-center";
 import { ArrowLeft, ArrowRight, ArrowUpRight, BookOpen, Check, CheckCircle2, ChevronDown, CircleHelp, Code2, Copy, CreditCard, KeyRound, Layers3, Menu, Moon, Play, Send, SlidersHorizontal, Sparkles, Sun, X, Zap } from "lucide-react";
 
 type Lang = "ar" | "en";
