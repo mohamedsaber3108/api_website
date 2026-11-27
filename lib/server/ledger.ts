@@ -65,6 +65,17 @@ export async function getAvailableMicroUsd(userId: string): Promise<number> {
   return Number(row?.available ?? 0);
 }
 
+/** Balance, open unexpired holds, and balance minus holds, read in one statement so the three numbers agree. */
+export async function getBalanceSummary(userId: string): Promise<{ balanceMicroUsd: number; heldMicroUsd: number; availableMicroUsd: number }> {
+  const row = await d1()
+    .prepare(`SELECT ${BALANCE} AS balance, ${OPEN_HOLDS} AS held`)
+    .bind(userId, Date.now())
+    .first<{ balance: number; held: number }>();
+  const balanceMicroUsd = Number(row?.balance ?? 0);
+  const heldMicroUsd = Number(row?.held ?? 0);
+  return { balanceMicroUsd, heldMicroUsd, availableMicroUsd: balanceMicroUsd - heldMicroUsd };
+}
+
 /**
  * Reserves `amount` for one request: a single conditional INSERT, run inside a D1 batch (D1 has no
  * interactive transaction; each statement is atomic and D1 runs one write at a time per database).

@@ -22,7 +22,7 @@ export async function api<T = unknown>(path: string, { method = 'GET', body }: O
   return data as T;
 }
 
-export type SessionUser = { id: string; email: string; name: string; role: 'customer' | 'support' | 'admin'; provider: 'password' | 'chatgpt'; emailVerified: boolean };
+export type SessionUser = { id: string; email: string; name: string; role: 'customer' | 'support' | 'admin' | 'super_admin'; provider: 'password' | 'chatgpt'; emailVerified: boolean };
 export type SessionInfo = { user: SessionUser | null; features: { inference: boolean; billing: boolean; email: boolean; chatgpt?: boolean } };
 
 export function usd(micro: number, digits = 2): string {

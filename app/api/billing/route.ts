@@ -4,15 +4,15 @@ import { creditLedger, invoices, payments } from '../../../db/schema';
 import { requireUser } from '../../../lib/server/auth';
 import { CREDIT_PACKAGES, features } from '../../../lib/server/config';
 import { handle, json } from '../../../lib/server/http';
-import { getBalanceMicroUsd } from '../../../lib/server/ledger';
+import { getBalanceSummary } from '../../../lib/server/ledger';
 
 export const dynamic = 'force-dynamic';
 
 export const GET = handle(async request => {
   const user = await requireUser(request);
   const db = getDb();
-  const [balance, transactions, paymentRows, invoiceRows] = await Promise.all([
-    getBalanceMicroUsd(user.userId),
+  const [summary, transactions, paymentRows, invoiceRows] = await Promise.all([
+    getBalanceSummary(user.userId),
     db
       .select({ id: creditLedger.id, deltaMicroUsd: creditLedger.deltaMicroUsd, type: creditLedger.type, note: creditLedger.note, createdAt: creditLedger.createdAt })
       .from(creditLedger)
@@ -32,5 +32,5 @@ export const GET = handle(async request => {
       .orderBy(desc(invoices.issuedAt))
       .limit(20),
   ]);
-  return json({ balanceMicroUsd: balance, packages: CREDIT_PACKAGES, checkoutEnabled: features.billing(), emailVerified: user.emailVerified, transactions, payments: paymentRows, invoices: invoiceRows });
+  return json({ balanceMicroUsd: summary.balanceMicroUsd, heldMicroUsd: summary.heldMicroUsd, availableMicroUsd: summary.availableMicroUsd, packages: CREDIT_PACKAGES, checkoutEnabled: features.billing(), inferenceEnabled: features.inference(), emailVerified: user.emailVerified, transactions, payments: paymentRows, invoices: invoiceRows });
 });

@@ -1,6 +1,7 @@
 // End-to-end smoke test against a running LOCAL server started with APP_ENV=development.
 // Usage: node scripts/smoke-test.mjs http://127.0.0.1:8799 [admin-email]
-// The admin email must be listed in ADMIN_EMAILS for the admin checks to pass.
+// The admin email AND `second.<admin-email>` must both be listed in ADMIN_EMAILS (comma separated): a credit
+// adjustment needs a second admin to approve it (SEC-2), so the test uses two admins.
 // Each run creates ~4 accounts; sign-up is limited to 10/hour per IP, so between repeated
 // runs clear the local buckets (with the server stopped):
 //   wrangler d1 execute DB --local ... --command "DELETE FROM rate_limit_buckets"
@@ -147,12 +148,29 @@ if (who.json.user?.role === 'admin') {
   const target = users.json.users?.[0];
   check('admin user search', target?.email === email);
   const before = target.balanceMicroUsd;
+  // Second admin (SEC-2): signs up, verifies, enrols MFA, then approves what the first admin requests.
+  const adminB = `second.${adminEmail}`;
+  let { c: b2, r: br } = await signUp(adminB, 'Admin Two');
+  if (br.status === 409) { b2 = client(); br = await b2('/api/auth/login', { method: 'POST', body: { email: adminB, password: 'correct-horse-battery' } }); }
+  else await b2('/api/auth/verify-email', { method: 'POST', body: { token: br.json.dev_verify_token } });
+  const begunB = await b2('/api/auth/mfa/begin', { method: 'POST', body: {} });
+  const confirmedB = await b2('/api/auth/mfa/confirm', { method: 'POST', body: { code: totp(begunB.json.secret) } });
+  check('second admin signed in and enrolled MFA', confirmedB.status === 200, `${br.status} ${begunB.status} ${confirmedB.status} ${JSON.stringify(confirmedB.json)}`);
   const key = `smoke-${run}`;
   const cr = await a(`/api/admin/users/${target.id}/credits`, { method: 'POST', body: { amountUsd: 5, note: 'smoke credit', requestKey: key } });
-  check('credit adjustment', cr.status === 201 && cr.json.balanceMicroUsd === before + 5_000_000, `before=${JSON.stringify(before)} ${cr.status} ${JSON.stringify(cr.json)}`);
+  check('credit adjustment becomes a pending request (202)', cr.status === 202 && cr.json.pending === true && !!cr.json.requestId, `${cr.status} ${JSON.stringify(cr.json)}`);
+  check('nothing applied before approval', (await u('/api/account')).json.balanceMicroUsd === before);
   const dup = await a(`/api/admin/users/${target.id}/credits`, { method: 'POST', body: { amountUsd: 5, note: 'smoke credit', requestKey: key } });
-  check('credit adjustment idempotent', dup.json.duplicate === true && dup.json.balanceMicroUsd === before + 5_000_000);
-  check('customer sees new balance', (await u('/api/account')).json.balanceMicroUsd === before + 5_000_000);
+  check('credit request idempotent', dup.status === 200 && dup.json.duplicate === true && dup.json.requestId === cr.json.requestId);
+  const own = await a(`/api/admin/requests/${cr.json.requestId}`, { method: 'POST', body: { action: 'approve', reason: 'approving my own' } });
+  check('requester cannot approve own request (403)', own.status === 403 && own.json.code === 'self_approval', `${own.status} ${JSON.stringify(own.json)}`);
+  const listed = await b2('/api/admin/requests');
+  check('second admin sees the pending request', listed.json.requests?.some(x => x.id === cr.json.requestId));
+  const appr = await b2(`/api/admin/requests/${cr.json.requestId}`, { method: 'POST', body: { action: 'approve', reason: 'smoke approval' } });
+  check('second admin approves; change applied', appr.status === 200 && appr.json.status === 'approved' && appr.json.duplicate === false, `${appr.status} ${JSON.stringify(appr.json)}`);
+  const again = await b2(`/api/admin/requests/${cr.json.requestId}`, { method: 'POST', body: { action: 'approve', reason: 'smoke approval' } });
+  check('approval replay is safe', again.status === 200 && again.json.duplicate === true);
+  check('customer sees new balance (applied once)', (await u('/api/account')).json.balanceMicroUsd === before + 5_000_000);
   check('admin ticket inbox', (await a('/api/admin/tickets')).json.tickets?.some(x => x.id === t.json.id));
   check('staff reply', (await a(`/api/admin/tickets/${t.json.id}`, { method: 'POST', body: { body: 'Hello from support' } })).status === 201);
   const thread = await u(`/api/support/tickets/${t.json.id}`);
@@ -161,7 +179,16 @@ if (who.json.user?.role === 'admin') {
   const inc = await a('/api/admin/incidents', { method: 'POST', body: { title: 'Smoke incident', body: 'Testing incidents', severity: 'minor' } });
   check('incident created', inc.status === 201);
   check('incident resolved', (await a('/api/admin/incidents', { method: 'PATCH', body: { id: inc.json.id, status: 'resolved' } })).status === 200);
-  check('audit log', (await a('/api/admin/audit?limit=5')).json.events?.length > 0);
+  // AUD-1: the audit log is for super_admin only. ADMIN_EMAILS never grants super_admin, so an admin gets 403.
+  check('admin (not super_admin) cannot read the audit log', (await a('/api/admin/audit?limit=5')).status === 403);
+  // Optional: SMOKE_SQLITE=<path to the LOCAL scratch D1 file> promotes this admin to super_admin there (role is read on every request).
+  if (process.env.SMOKE_SQLITE) {
+    const { DatabaseSync } = await import('node:sqlite');
+    const db = new DatabaseSync(process.env.SMOKE_SQLITE);
+    db.prepare("UPDATE accounts SET role = 'super_admin' WHERE email = ?").run(adminEmail.toLowerCase());
+    db.close();
+    check('super_admin reads the audit log', (await a('/api/admin/audit?limit=5')).json.events?.length > 0);
+  }
   check('admin cannot demote self', (await a(`/api/admin/users/${who.json.user.id}`, { method: 'PATCH', body: { role: 'customer' } })).status === 400);
   check('suspend user', (await a(`/api/admin/users/${target.id}`, { method: 'PATCH', body: { status: 'suspended' } })).status === 200);
   check('suspended user signed out', (await u('/api/account')).status === 401);

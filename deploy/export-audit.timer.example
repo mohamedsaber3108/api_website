@@ -1,0 +1,12 @@
+# EXAMPLE ONLY (AUD-2). Not installed, not run by any script in this repo.
+# Pairs with export-audit.service.example. Enable it yourself: systemctl enable --now export-audit.timer
+# Runs shortly after midnight UTC so the day before is complete. Persistent=true runs a missed day after a reboot.
+[Unit]
+Description=Daily signed audit export
+
+[Timer]
+OnCalendar=*-*-* 00:20:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

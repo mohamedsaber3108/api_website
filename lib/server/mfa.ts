@@ -156,7 +156,7 @@ async function assertNotLocked(request: Request, userId: string) {
     .first<{ count: number; window_start: number }>();
   if (row && row.count > MAX_FAILURES) {
     const retry = Math.max(1, Math.ceil((row.window_start + LOCK_SECONDS * 1000 - now) / 1000));
-    if (row.count === MAX_FAILURES + 1) await audit(request, userId, 'auth.mfa_locked', { type: 'account', id: userId });
+    if (row.count === MAX_FAILURES + 1) await audit(request, userId, 'auth.mfa_locked', { type: 'account', id: userId }, undefined, { result: 'denied', reason: 'too_many_wrong_codes' });
     throw new HttpError(429, 'Too many wrong codes. MFA is locked for this account for a while.', 'mfa_locked', { retry_after: retry }, { 'Retry-After': String(retry) });
   }
 }
@@ -166,7 +166,7 @@ async function clearFailures(userId: string) {
 }
 
 async function recordFailure(request: Request, userId: string, kind: string): Promise<never> {
-  await audit(request, userId, 'auth.mfa_verify_failed', { type: 'account', id: userId }, { kind });
+  await audit(request, userId, 'auth.mfa_verify_failed', { type: 'account', id: userId }, { kind }, { result: 'denied', reason: 'wrong_code' });
   throw new HttpError(401, 'Incorrect code', 'invalid_mfa_code');
 }
 

@@ -1,5 +1,6 @@
 import handler from "vinext/server/fetch-handler";
 import { runWithConnectorBinding } from "../lib/connector-context";
+import { withSecurityHeaders } from "../lib/server/security-headers";
 import type { ConnectorBinding } from "../lib/connector-contract.mjs";
 
 const worker = {
@@ -23,7 +24,9 @@ const worker = {
         },
       };
     }
-    return runWithConnectorBinding(binding, () => handler.fetch(request, env, ctx));
+    return Promise.resolve(runWithConnectorBinding(binding, () => handler.fetch(request, env, ctx))).then((response) =>
+      import.meta.env.DEV ? response : withSecurityHeaders(request, response),
+    );
   },
 };
 

@@ -1,0 +1,14 @@
+# EXAMPLE ONLY (AUD-1). Not installed, not run by any script in this repo.
+# Copy to /etc/systemd/system/ yourself after the owner picks the paths and the alert hook.
+# Step before it: a job of yours must put a fresh COPY of the database at the path below (never the live file).
+[Unit]
+Description=Verify the audit hash chain on a database copy
+
+[Service]
+Type=oneshot
+User=wasl
+# Replace the paths. Pass the COPY, not the live database.
+ExecStart=/usr/bin/node /opt/wasl/scripts/verify-audit-daily.mjs /var/backups/wasl/audit-copy.sqlite
+# Alert hook: set exactly what the owner chose. Leave both lines out and the alert stays OFF.
+# Environment=AUDIT_ALERT_COMMAND=/opt/wasl/alert-owner.sh
+# Environment=AUDIT_ALERT_WEBHOOK_URL=https://example.invalid/hook

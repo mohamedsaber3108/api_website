@@ -36,6 +36,20 @@
       "when": 1795729228264,
       "tag": "0004_gateway_holds",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1795730072933,
+      "tag": "0005_admin_requests",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1795732894980,
+      "tag": "0006_audit_chain",
+      "breakpoints": true
     }
   ]
 }
