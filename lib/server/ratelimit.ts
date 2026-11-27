@@ -1,4 +1,6 @@
 import { clientIp, db1, HttpError } from './http';
+import { purgeOldHolds } from './ledger';
+import { errText } from './redact';
 
 /**
  * Fixed-window counter stored in D1. Returns when the limit is exceeded.
@@ -6,6 +8,7 @@ import { clientIp, db1, HttpError } from './http';
  */
 export async function rateLimit(key: string, limit: number, windowSeconds: number, message = 'Too many requests. Please try again later.') {
   const now = Date.now();
+  await maybePurge(now);
   const windowMs = windowSeconds * 1000;
   const row = await db1()
     .prepare(
@@ -21,6 +24,27 @@ export async function rateLimit(key: string, limit: number, windowSeconds: numbe
     const retry = Math.max(1, Math.ceil((row.window_start + windowMs - now) / 1000));
     throw new HttpError(429, message, 'rate_limited', { retry_after: retry }, { 'Retry-After': String(retry) });
   }
+}
+
+const PURGE_EVERY_MS = 3600 * 1000;
+let lastPurge = 0;
+
+/** FU-1, FU-3: at most once an hour per isolate, purge old rate-limit rows and old settled/released holds. A failure is logged (redacted) and never fails the request. */
+export async function maybePurge(now = Date.now()) {
+  if (now - lastPurge < PURGE_EVERY_MS) return;
+  lastPurge = now;
+  for (const [name, run] of [['rate limits', purgeRateLimits], ['holds', () => purgeOldHolds()]] as const) {
+    try {
+      await run();
+    } catch (e) {
+      console.error(`purge ${name} failed`, errText(e));
+    }
+  }
+}
+
+/** For tests only: lets the hourly gate fire again. */
+export function resetPurgeGate() {
+  lastPurge = 0;
 }
 
 /** Plain bilingual 429 text with the wait time. */
@@ -44,7 +68,7 @@ export async function publicLimit(request: Request, name: string, limit: number,
   }
 }
 
-/** Opportunistic cleanup; call occasionally from low-traffic paths. */
+/** Deletes rate-limit rows older than the 24 h window. */
 export async function purgeRateLimits() {
   await db1().prepare('DELETE FROM rate_limit_buckets WHERE window_start < ?1').bind(Date.now() - 24 * 3600 * 1000).run();
 }

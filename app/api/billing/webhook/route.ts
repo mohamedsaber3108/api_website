@@ -85,7 +85,7 @@ export const POST = handle(async request => {
     }
     await db.update(paymentWebhookEvents).set({ processedAt: Date.now(), error: null }).where(eq(paymentWebhookEvents.id, event.id));
   } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
+    const message = errText(e);
     await db.update(paymentWebhookEvents).set({ error: message.slice(0, 500) }).where(eq(paymentWebhookEvents.id, event.id));
     console.error('webhook processing failed', event.id, errText(e));
     // 500 makes Stripe retry; the ledger idempotency key makes the retry safe.
