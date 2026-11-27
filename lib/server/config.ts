@@ -3,6 +3,11 @@ import { env } from 'cloudflare:workers';
 export const TERMS_VERSION = '2026-10-01';
 export const SESSION_COOKIE = 'wasl_session';
 export const SESSION_TTL_MS = 30 * 24 * 3600 * 1000;
+/** Staff sessions (support, admin, super_admin): end after 30 minutes without activity, or 8 hours after sign-in. */
+export const STAFF_IDLE_MS = 30 * 60 * 1000;
+export const STAFF_ABSOLUTE_MS = 8 * 3600 * 1000;
+/** A staff session's last-seen time is written at most once per 60 seconds. */
+export const STAFF_TOUCH_MS = 60 * 1000;
 export const MICRO = 1_000_000;
 
 /** Top-up packages offered at checkout (USD). */

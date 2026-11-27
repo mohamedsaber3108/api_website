@@ -2,7 +2,7 @@ import { and, eq, gt, isNull } from 'drizzle-orm';
 import { getDb } from '../../db';
 import { accounts, authTokens, sessions } from '../../db/schema';
 import { audit, auditDeniedOnce } from './audit';
-import { adminEmails, adminEmailsBreakGlass, features, SESSION_COOKIE, SESSION_TTL_MS } from './config';
+import { adminEmails, adminEmailsBreakGlass, features, SESSION_COOKIE, SESSION_TTL_MS, STAFF_ABSOLUTE_MS, STAFF_IDLE_MS, STAFF_TOUCH_MS } from './config';
 import { randomHex, sha256Hex } from './crypto';
 import { clientIp, cookieHeader, HttpError, readCookie } from './http';
 import { assertAdminMfa } from './mfa';
@@ -10,6 +10,8 @@ import { assertAdminMfa } from './mfa';
 export type Role = 'customer' | 'support' | 'admin' | 'super_admin';
 
 export const isAdminRole = (r: Role) => r === 'admin' || r === 'super_admin';
+/** Staff = support, admin, super_admin. They need MFA and have session time limits (SEC-3b). */
+export const isStaffRole = (r: Role) => r === 'support' || isAdminRole(r);
 
 export type Principal = {
   userId: string;
@@ -23,6 +25,8 @@ export type Principal = {
   mfaVerifiedAt: number | null;
   /** True when `admin` came only from ADMIN_EMAILS while a super_admin exists (break-glass). Every admin request then writes an audit row. */
   breakGlass: boolean;
+  /** Only for a staff session cookie: when the idle limit and the absolute limit end this session. */
+  sessionEnds?: { idleEndsAt: number; absoluteEndsAt: number };
 };
 
 const USER_ID_HEADER = 'oai-authenticated-user-id';
@@ -56,8 +60,13 @@ function safeDecode(value: string): string | null {
   }
 }
 
-/** Resolves the caller from a Wasl session cookie, then the hosted ChatGPT identity headers. */
-export async function getPrincipal(request: Request): Promise<Principal | null> {
+/**
+ * Resolves the caller from a Wasl session cookie, then the hosted ChatGPT identity headers.
+ * Staff sessions end after STAFF_IDLE_MS without activity or STAFF_ABSOLUTE_MS after sign-in: the row is deleted,
+ * `auth.session_expired` is audited and the caller is anonymous. `peek` reads the session without counting as activity.
+ * shortcut: the idle clock moves at most once per 60 s (STAFF_TOUCH_MS), so the real idle end can be up to 60 s later than shown.
+ */
+export async function getPrincipal(request: Request, opts: { peek?: boolean } = {}): Promise<Principal | null> {
   const db = getDb();
   const token = readCookie(request, SESSION_COOKIE);
   if (token) {
@@ -70,11 +79,27 @@ export async function getPrincipal(request: Request): Promise<Principal | null> 
       .where(and(eq(sessions.id, id), gt(sessions.expiresAt, now)))
       .limit(1);
     if (row && row.a.status === 'active') {
-      if (now - row.s.lastSeenAt > 10 * 60 * 1000) {
-        await db.update(sessions).set({ lastSeenAt: now }).where(eq(sessions.id, id));
-      }
       const verified = !!row.a.emailVerifiedAt;
       const eff = await effectiveRole(row.a.role, row.a.email, verified);
+      let seen = row.s.lastSeenAt;
+      let sessionEnds: Principal['sessionEnds'];
+      if (isStaffRole(eff.role)) {
+        const absoluteEndsAt = row.s.createdAt + STAFF_ABSOLUTE_MS;
+        const limit = now >= absoluteEndsAt ? 'absolute' : now >= seen + STAFF_IDLE_MS ? 'idle' : null;
+        if (limit) {
+          // Only the request that really deletes the row writes the audit row.
+          const gone = await db.delete(sessions).where(eq(sessions.id, id)).returning({ id: sessions.id });
+          if (gone.length) await audit(request, row.a.userId, 'auth.session_expired', { type: 'account', id: row.a.userId }, { limit }, { actorRole: eff.role });
+          return null;
+        }
+        if (!opts.peek && now - seen >= STAFF_TOUCH_MS) {
+          await db.update(sessions).set({ lastSeenAt: now }).where(eq(sessions.id, id));
+          seen = now;
+        }
+        sessionEnds = { idleEndsAt: seen + STAFF_IDLE_MS, absoluteEndsAt };
+      } else if (now - seen > 10 * 60 * 1000) {
+        await db.update(sessions).set({ lastSeenAt: now }).where(eq(sessions.id, id));
+      }
       return {
         userId: row.a.userId,
         email: row.a.email,
@@ -85,6 +110,7 @@ export async function getPrincipal(request: Request): Promise<Principal | null> 
         emailVerified: verified,
         sessionId: id,
         mfaVerifiedAt: row.s.mfaVerifiedAt,
+        sessionEnds,
       };
     }
   }
@@ -137,8 +163,8 @@ export async function requireRole(request: Request, ...roles: Role[]): Promise<P
     await auditDeniedOnce(request, p.userId, 'auth.admin_denied', { type: 'route', id: path }, 'role_not_allowed', { actorRole: p.role });
     throw new HttpError(403, 'Forbidden', 'forbidden');
   }
-  // Admins also need an MFA-verified session. Support staff are not required yet (SEC-3b).
-  if (isAdminRole(p.role)) {
+  // All staff (support, admin, super_admin) need an MFA-verified session (SEC-3b, ADMIN.md s.51, D-10).
+  if (isStaffRole(p.role)) {
     try {
       await assertAdminMfa(p);
     } catch (e) {
@@ -150,10 +176,10 @@ export async function requireRole(request: Request, ...roles: Role[]): Promise<P
   return p;
 }
 
-/** Like requireUser, but for the MFA routes: an admin with a real session cookie (hosted ChatGPT identity has none). */
+/** Like requireUser, but for the MFA routes: a staff member (support, admin, super_admin) with a real session cookie (hosted ChatGPT identity has none). */
 export async function requireAdminSession(request: Request): Promise<Principal & { sessionId: string }> {
   const p = await requireUser(request);
-  if (!isAdminRole(p.role) || !p.sessionId) throw new HttpError(403, 'Forbidden', 'forbidden');
+  if (!isStaffRole(p.role) || !p.sessionId) throw new HttpError(403, 'Forbidden', 'forbidden');
   return p as Principal & { sessionId: string };
 }
 
