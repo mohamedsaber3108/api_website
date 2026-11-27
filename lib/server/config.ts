@@ -1,6 +1,8 @@
 import { env } from 'cloudflare:workers';
 
-export const TERMS_VERSION = '2026-10-01';
+import { TERMS_VERSION } from '../legal-versions';
+
+export { TERMS_VERSION };
 export const SESSION_COOKIE = 'wasl_session';
 export const SESSION_TTL_MS = 30 * 24 * 3600 * 1000;
 /** Staff sessions (support, admin, super_admin): end after 30 minutes without activity, or 8 hours after sign-in. */

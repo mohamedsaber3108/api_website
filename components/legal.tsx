@@ -1,13 +1,12 @@
 'use client';
+import { useSyncExternalStore } from 'react';
 import { FileText } from 'lucide-react';
+import { LEGAL_HISTORY, LEGAL_VERSIONS, findLegalVersion } from '../lib/legal-versions';
 
 export type LegalPage = 'terms' | 'privacy' | 'refund' | 'acceptable-use';
 type Lang = 'ar' | 'en';
 type Section = { h: string; p: string[] };
 type Doc = { title: string; intro: string; sections: Section[] };
-
-/** Must match TERMS_VERSION in lib/server/config.ts, which is recorded on each account at sign-up. */
-export const LEGAL_VERSION = '2026-10-01';
 
 const COMPANY = '[COMPANY LEGAL NAME]';
 const CONTACT = '[legal@your-domain]';
@@ -119,12 +118,40 @@ export function legalTitle(page: LegalPage, lang: Lang) {
   return docs[page][lang].title;
 }
 
+/** The ?v= version id of the address bar; read on the client only, so the server render never differs. */
+function readVersionParam() {
+  return new URLSearchParams(window.location.search).get('v');
+}
+function subscribeUrl(onChange: () => void) {
+  window.addEventListener('popstate', onChange);
+  return () => window.removeEventListener('popstate', onChange);
+}
+
+/** Full text of each superseded version: page -> version id -> language. Empty until a second version is published. */
+export const LEGAL_ARCHIVE: Partial<Record<LegalPage, Record<string, Record<Lang, Doc>>>> = {};
+
+/** The text of a page at a version: the live text for the current version, the archive for older ones, else null. */
+export function legalDoc(page: LegalPage, version: string, lang: Lang): Doc | null {
+  if (version === LEGAL_VERSIONS[page].version) return docs[page][lang];
+  return LEGAL_ARCHIVE[page]?.[version]?.[lang] ?? null;
+}
+
 export default function Legal({ page, lang, go }: { page: LegalPage; lang: Lang; go: (p: LegalPage) => void }) {
   const ar = lang === 'ar';
-  const d = docs[page][lang];
+  const v = useSyncExternalStore(subscribeUrl, readVersionParam, () => null);
+  const current = LEGAL_VERSIONS[page];
+  const archived = v && v !== current.version ? legalDoc(page, v, lang) : null;
+  const unavailable = !!v && v !== current.version && !archived;
+  const shown = archived ? findLegalVersion(page, v as string) ?? current : current;
+  const d = archived ?? docs[page][lang];
+  const earlier = LEGAL_HISTORY[page].slice(1);
   return <main className="inner-page"><section className="page-heading section"><span className="section-kicker">WASL / LEGAL</span><h1>{d.title}</h1><p>{d.intro}</p><div className="page-heading-art"><FileText /></div></section>
     <section className="section legal-layout"><aside className="dash-nav">{LEGAL_PAGES.map(p => <button key={p} className={p === page ? 'dash-selected' : ''} onClick={() => go(p)}>{docs[p][lang].title}</button>)}</aside>
-      <article className="legal-doc"><p className="muted">{ar ? 'الإصدار' : 'Version'} {LEGAL_VERSION}</p>
+      <article className="legal-doc">
+        {archived && <p role="status" className="muted">{ar ? 'أنت تقرأ إصدارًا سابقًا' : 'You are reading an earlier version'} (<bdi>{shown.version}</bdi>). {ar ? 'الإصدار الحالي' : 'Current version'}: <bdi>{current.version}</bdi>. <a href={`/${page}`}>{ar ? 'اقرأ الإصدار الحالي' : 'Read the current version'}</a></p>}
+        {unavailable && <p role="status" className="muted">{ar ? 'هذا الإصدار غير متاح. نعرض الإصدار الحالي' : 'That version is not available. Showing the current version'} (<bdi>{current.version}</bdi>).</p>}
+        <p className="muted">{ar ? 'الإصدار' : 'Version'} <bdi>{shown.version}</bdi>{ar ? '، ساري من ' : ', effective '}<bdi>{shown.effective}</bdi></p>
         {d.sections.map(s => <section key={s.h}><h2>{s.h}</h2>{s.p.length > 1 && s.h.match(/Not allowed|What we collect|غير مسموح|ما نجمعه/) ? <ul>{s.p.map(x => <li key={x}>{x}</li>)}</ul> : s.p.map(x => <p key={x}>{x}</p>)}</section>)}
+        {earlier.length > 0 && <section><h2>{ar ? 'الإصدارات السابقة' : 'Earlier versions'}</h2><ul>{earlier.map(e => <li key={e.version}><a href={`/${page}?v=${e.version}`}><bdi>{e.version}</bdi></a></li>)}</ul></section>}
       </article></section></main>;
 }
