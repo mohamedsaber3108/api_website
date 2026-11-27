@@ -7,6 +7,8 @@ import Dialog from './dialog';
 import MfaPanel from './mfa';
 import SettingsTab from './admin-settings';
 import SessionTimeout from './session-timeout';
+import ConfirmDialog from './confirm-dialog';
+import { onTabListKeyDown } from '../lib/tabs';
 
 type Tab = 'overview' | 'users' | 'approvals' | 'tickets' | 'models' | 'settings' | 'incidents' | 'audit';
 type Overview = { users: { total: number; last30Days: number }; activeKeys: number; openTickets: number; revenueLast30DaysMinor: number; usageLast30Days: { requests: number; billedMicroUsd: number; providerMicroUsd: number }; customerCreditsOutstandingMicroUsd: number; recentSignups: { id: string; email: string; name: string | null; createdAt: number }[] };
@@ -47,8 +49,8 @@ export default function AdminConsole({ lang, session }: { lang: 'ar' | 'en'; ses
   return <main className="inner-page"><section className="page-heading section"><span className="section-kicker">WASL / ADMIN</span><h1>{tr('لوحة الإدارة', 'Admin console')}</h1><div className="page-heading-art">◈</div></section>
     <SessionTimeout tr={tr} />
     {stepUpOpen && <section className="section"><MfaPanel tr={tr} reason={mfaReason} onVerified={() => { setMfaReason(''); setStepUpOpen(false); }} /></section>}
-    <section className="section dashboard-app"><aside className="dash-nav">{tabs.filter(t => (isAdmin || !t.admin) && (isSuper || !t.superOnly)).map(t => <button key={t.id} className={tab === t.id ? 'dash-selected' : ''} onClick={() => setTab(t.id)}><t.icon size={18} />{t.label}</button>)}</aside>
-      <div className="dash-body">
+    <section className="section dashboard-app"><aside className="dash-nav"><div className="dash-tablist" role="tablist" aria-orientation="vertical" aria-label={tr('أقسام الإدارة', 'Admin sections')} onKeyDown={onTabListKeyDown}>{tabs.filter(t => (isAdmin || !t.admin) && (isSuper || !t.superOnly)).map(t => <button key={t.id} id={`admin-tab-${t.id}`} type="button" role="tab" aria-selected={tab === t.id} aria-controls="admin-panel" tabIndex={tab === t.id ? 0 : -1} className={tab === t.id ? 'dash-selected' : ''} onClick={() => setTab(t.id)}><t.icon size={18} />{t.label}</button>)}</div></aside>
+      <div className="dash-body" id="admin-panel" role="tabpanel" aria-labelledby={`admin-tab-${tab}`}>
         {tab === 'overview' && <OverviewTab tr={tr} fmt={fmt} />}
         {tab === 'users' && <UsersTab tr={tr} fmt={fmt} onStepUp={stepUp} isSuper={isSuper} />}
         {tab === 'approvals' && <ApprovalsTab tr={tr} fmt={fmt} me={session.user?.id ?? ''} isSuper={isSuper} />}
@@ -97,6 +99,7 @@ function UsersTab({ tr, fmt, onStepUp, isSuper }: P & { onStepUp: () => void; is
   const [notice, setNotice] = useState('');
   const [credit, setCredit] = useState<{ id: string; amount: string; note: string } | null>(null);
   const [promote, setPromote] = useState<{ id: string; email: string; role: string; reason: string; error: string } | null>(null);
+  const [suspend, setSuspend] = useState<User | null>(null);
   const load = useCallback(() => api<{ users: User[] }>(`/api/admin/users?q=${encodeURIComponent(q)}`).then(r => setUsers(r.users)).catch(e => setError(errorMessage(e))), [q]);
   useEffect(() => { load(); }, [load]);
   const sent = () => setNotice(tr('أُرسل الطلب. يجب أن يوافق عليه مدير آخر خلال ٢٤ ساعة. تجده في تبويب الموافقات.', 'Request sent. Another admin must approve it within 24 hours. See the Approvals tab.'));
@@ -108,7 +111,7 @@ function UsersTab({ tr, fmt, onStepUp, isSuper }: P & { onStepUp: () => void; is
     <div className="rows">{users.map(u => <div key={u.id} className="row-wrap"><span><b>{u.name || u.email}</b><small>{u.email} · {u.provider} · {u.emailVerified ? '✓' : tr('غير مؤكد', 'unverified')} · {fmt(u.createdAt)} · {usd(u.balanceMicroUsd, 4)}</small></span>
       <span className="row-actions">
         <select aria-label={tr('الدور', 'Role')} value={u.role} disabled={u.status === 'deleted' || (!isSuper && isAdminLevel(u.role))} onChange={e => { const role = e.target.value; if (isAdminLevel(role)) setPromote({ id: u.id, email: u.email, role, reason: '', error: '' }); else patch(u.id, { role }); }}><option>customer</option><option>support</option>{(isSuper || u.role === 'admin') && <option>admin</option>}{(isSuper || u.role === 'super_admin') && <option>super_admin</option>}</select>
-        {u.status !== 'deleted' && <button className="pill-link" disabled={!isSuper && isAdminLevel(u.role)} onClick={() => { if (confirm(u.status === 'active' ? tr('إيقاف الحساب وإلغاء مفاتيحه؟', 'Suspend this account and revoke its keys?') : tr('إعادة التفعيل؟', 'Reactivate?'))) patch(u.id, { status: u.status === 'active' ? 'suspended' : 'active' }); }}>{u.status === 'active' ? tr('فعّال', 'Active') : u.status === 'suspended' ? tr('موقوف', 'Suspended') : u.status}</button>}
+        {u.status !== 'deleted' && <button className="pill-link" disabled={!isSuper && isAdminLevel(u.role)} onClick={() => setSuspend(u)}>{u.status === 'active' ? tr('فعّال', 'Active') : u.status === 'suspended' ? tr('موقوف', 'Suspended') : u.status}</button>}
         <button className="pill-link" onClick={() => setCredit({ id: u.id, amount: '', note: '' })}>{tr('رصيد', 'Credit')}</button></span>
       {credit?.id === u.id && <form className="form-row" onSubmit={async e => { e.preventDefault(); try { await api(`/api/admin/users/${u.id}/credits`, { method: 'POST', body: { amountUsd: Number(credit.amount), note: credit.note, requestKey: crypto.randomUUID() } }); setCredit(null); setError(''); sent(); await load(); } catch (err) { if (err instanceof ApiError && (err.code === 'mfa_recent_required' || err.code === 'mfa_required')) onStepUp(); else setError(apiMsg(err, tr)); } }}>
         <input type="number" step="0.01" required aria-label={tr('المبلغ بالدولار (موجب أو سالب)', 'Amount in USD (+/-)')} placeholder="USD (+/-)" value={credit.amount} onChange={e => setCredit({ ...credit, amount: e.target.value })} /><input required minLength={3} aria-label={tr('السبب', 'Reason')} placeholder={tr('السبب', 'Reason')} value={credit.note} onChange={e => setCredit({ ...credit, note: e.target.value })} /><button className="button-dark">{tr('طلب موافقة', 'Request approval')}</button><button type="button" className="link" aria-label={tr('إغلاق', 'Close')} onClick={() => setCredit(null)}>×</button></form>}</div>)}</div>
@@ -119,6 +122,7 @@ function UsersTab({ tr, fmt, onStepUp, isSuper }: P & { onStepUp: () => void; is
         <p className="muted">{tr('لن تُطبَّق الترقية قبل موافقة مدير أعلى آخر.', 'The promotion is not applied until another super admin approves it.')}</p>
         {promote.error && <p className="live-error" role="alert">{promote.error}</p>}
         <div className="modal-actions"><button className="button-dark">{tr('إرسال الطلب', 'Send request')}</button><button type="button" className="pill-link" onClick={() => setPromote(null)}>{tr('إلغاء', 'Cancel')}</button></div></form></Dialog>}
+    {suspend && <ConfirmDialog title={suspend.status === 'active' ? tr('إيقاف الحساب', 'Suspend account') : tr('إعادة التفعيل', 'Reactivate account')} message={<>{suspend.status === 'active' ? tr('إيقاف الحساب وإلغاء مفاتيحه؟', 'Suspend this account and revoke its keys?') : tr('إعادة تفعيل هذا الحساب؟', 'Reactivate this account?')} <bdi>{suspend.email}</bdi></>} confirmLabel={suspend.status === 'active' ? tr('إيقاف', 'Suspend') : tr('إعادة التفعيل', 'Reactivate')} cancelLabel={tr('رجوع', 'Cancel')} onCancel={() => setSuspend(null)} onConfirm={() => { const u = suspend; setSuspend(null); patch(u.id, { status: u.status === 'active' ? 'suspended' : 'active' }); }} />}
   </div>;
 }
 

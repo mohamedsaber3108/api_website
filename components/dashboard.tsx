@@ -4,6 +4,8 @@ import { BarChart3, CreditCard, Download, KeyRound, LifeBuoy, LockKeyhole, Plus,
 import { api, ApiError, errorMessage, usd, type SessionInfo } from '../lib/client-api';
 import { inferenceOffMessage } from '../lib/checkout-error';
 import SpendLimits from './spend-limits';
+import ConfirmDialog from './confirm-dialog';
+import { onTabListKeyDown } from '../lib/tabs';
 
 type Lang = 'ar' | 'en';
 type Tab = 'overview' | 'keys' | 'usage' | 'billing' | 'support' | 'settings';
@@ -47,9 +49,9 @@ export default function Dashboard({ lang, session, refreshSession, go }: { lang:
 
   return <section className="section dashboard-app"><aside className="dash-nav">
     <div className="dash-user"><strong>{user.name}</strong><small>{user.email}</small>{user.role !== 'customer' && <span className="role-pill">{user.role}</span>}</div>
-    {TABS.map(t => <button key={t.id} className={tab === t.id ? 'dash-selected' : ''} onClick={() => { setTab(t.id); setNotice(''); }}><t.icon size={18} />{tr(t.ar, t.en)}</button>)}
+    <div className="dash-tablist" role="tablist" aria-orientation="vertical" aria-label={tr('أقسام لوحة التحكم', 'Dashboard sections')} onKeyDown={onTabListKeyDown}>{TABS.map(t => <button key={t.id} id={`dash-tab-${t.id}`} type="button" role="tab" aria-selected={tab === t.id} aria-controls="dash-panel" tabIndex={tab === t.id ? 0 : -1} className={tab === t.id ? 'dash-selected' : ''} onClick={() => { setTab(t.id); setNotice(''); }}><t.icon size={18} />{tr(t.ar, t.en)}</button>)}</div>
     {(user.role === 'admin' || user.role === 'super_admin' || user.role === 'support') && <button onClick={() => go('admin')}><LockKeyhole size={18} />{tr('لوحة الإدارة', 'Admin console')}</button>}
-  </aside><div className="dash-body">
+  </aside><div className="dash-body" id="dash-panel" role="tabpanel" aria-labelledby={`dash-tab-${tab}`}>
     {!user.emailVerified && <VerifyBanner ar={ar} />}
     {error && <p className="live-error" role="alert">{error}</p>}{notice && <p className="auth-info">{notice}</p>}
     {!data ? <p className="muted">{tr('جارٍ التحميل…', 'Loading…')}</p> : <>
@@ -91,7 +93,7 @@ function Overview({ ar, data, fmt, setTab }: { ar: boolean; data: Account; fmt: 
       <div className="stat-card"><span><KeyRound size={19} /> {tr('مفاتيح فعّالة', 'Active keys')}</span><strong>{data.keys.length}</strong><small><button className="link" onClick={() => setTab('keys')}>{tr('إدارة', 'Manage')}</button></small></div>
     </div>
     {!data.service.inference && <p className="auth-info">{tr('خدمة الاستدلال غير مفعّلة على هذه النسخة بعد.', 'Inference is not activated on this deployment yet.')}</p>}
-    <div className="dash-panel"><h3>{tr('آخر 14 يومًا', 'Last 14 days')}</h3><Bars label="requests per day" data={(summary?.daily ?? []).map(d => ({ day: d.day, value: d.requests }))} /></div>
+    <div className="dash-panel"><h3>{tr('آخر 14 يومًا', 'Last 14 days')}</h3><Bars label={tr('الطلبات يوميًا خلال آخر 14 يومًا', 'Requests per day over the last 14 days')} data={(summary?.daily ?? []).map(d => ({ day: d.day, value: d.requests }))} /></div>
     <div className="dash-panel"><h3>{tr('آخر الطلبات', 'Recent requests')}</h3>{data.usage.length === 0 ? <p className="muted">{tr('لا توجد طلبات بعد.', 'No requests yet.')}</p> : <div className="rows">{data.usage.slice(0, 10).map(u => <div key={u.id}><span><b>{u.model}</b><small>{fmt(u.createdAt)} · {u.inputTokens}+{u.outputTokens} tokens · {u.source}{u.status !== 'ok' ? ` · ${u.status}` : ''}</small></span><strong>{usd(u.costMicroUsd, 6)}</strong></div>)}</div>}</div></>;
 }
 
@@ -103,16 +105,17 @@ function Keys({ ar, keys, fmt, reload, inference }: { ar: boolean; keys: Key[]; 
   const [secret, setSecret] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [ask, setAsk] = useState<{ kind: 'rotate' | 'revoke'; id: string } | null>(null);
   async function create() {
     setBusy(true); setError('');
     try { const r = await api<{ secret: string }>('/api/account/keys', { method: 'POST', body: { name, scopes, expiresInDays: days } }); setSecret(r.secret); await reload(); } catch (e) { setError(errorMessage(e)); } finally { setBusy(false); }
   }
   async function rotate(id: string) {
-    if (!confirm(tr('سيتم إلغاء المفتاح الحالي وإنشاء بديل. متابعة؟', 'The current key will be revoked and replaced. Continue?'))) return;
+    // Confirmed by the ConfirmDialog below.
     try { const r = await api<{ secret: string }>('/api/account/keys/rotate', { method: 'POST', body: { id } }); setSecret(r.secret); await reload(); } catch (e) { setError(errorMessage(e)); }
   }
   async function revoke(id: string) {
-    if (!confirm(tr('إلغاء المفتاح نهائيًا؟', 'Revoke this key permanently?'))) return;
+    // Confirmed by the ConfirmDialog below.
     try { await api('/api/account/keys', { method: 'DELETE', body: { id } }); setSecret(''); await reload(); } catch (e) { setError(errorMessage(e)); }
   }
   return <div className="dash-panel"><h3>{tr('مفاتيح API', 'API keys')} <small>{keys.length}/10</small></h3>
@@ -124,7 +127,8 @@ function Keys({ ar, keys, fmt, reload, inference }: { ar: boolean; keys: Key[]; 
     {error && <p className="live-error" role="alert">{error}</p>}
     {secret && <div className="account-secret"><b>{tr('انسخه الآن، لن يظهر مرة ثانية', 'Copy it now; it will not be shown again')}</b><code dir="ltr">{secret}</code><button onClick={() => navigator.clipboard.writeText(secret)}><Copy size={15} />{tr('نسخ', 'Copy')}</button></div>}
     <div className="rows">{keys.length === 0 ? <p className="muted">{tr('لا توجد مفاتيح بعد.', 'No keys yet.')}</p> : keys.map(k => <div key={k.id}><span><b>{k.name}</b><small><code>{k.prefix}…</code> · {k.scopes} · {k.rateLimitPerMin}/min · {tr('أُنشئ', 'created')} {fmt(k.createdAt)} · {k.lastUsedAt ? `${tr('آخر استخدام', 'last used')} ${fmt(k.lastUsedAt)}` : tr('لم يُستخدم', 'never used')}{k.expiresAt ? ` · ${tr('ينتهي', 'expires')} ${fmt(k.expiresAt)}` : ''}</small></span>
-      <span className="row-actions"><button aria-label={tr('تدوير', 'Rotate')} title={tr('تدوير', 'Rotate')} onClick={() => rotate(k.id)}><RefreshCw size={17} /></button><button aria-label={tr('إلغاء', 'Revoke')} title={tr('إلغاء', 'Revoke')} onClick={() => revoke(k.id)}><Trash2 size={17} /></button></span></div>)}</div></div>;
+      <span className="row-actions"><button aria-label={tr('تدوير', 'Rotate')} title={tr('تدوير', 'Rotate')} onClick={() => setAsk({ kind: 'rotate', id: k.id })}><RefreshCw size={17} /></button><button aria-label={tr('إلغاء', 'Revoke')} title={tr('إلغاء', 'Revoke')} onClick={() => setAsk({ kind: 'revoke', id: k.id })}><Trash2 size={17} /></button></span></div>)}</div>
+    {ask && <ConfirmDialog title={ask.kind === 'rotate' ? tr('تدوير المفتاح', 'Rotate key') : tr('إلغاء المفتاح', 'Revoke key')} message={ask.kind === 'rotate' ? tr('سيتم إلغاء المفتاح الحالي وإنشاء بديل. متابعة؟', 'The current key will be revoked and replaced. Continue?') : tr('إلغاء المفتاح نهائيًا؟ لا يمكن التراجع.', 'Revoke this key permanently? This cannot be undone.')} confirmLabel={ask.kind === 'rotate' ? tr('تدوير', 'Rotate') : tr('إلغاء المفتاح', 'Revoke key')} cancelLabel={tr('رجوع', 'Cancel')} onCancel={() => setAsk(null)} onConfirm={() => { const { kind, id } = ask; setAsk(null); if (kind === 'rotate') rotate(id); else revoke(id); }} />}</div>;
 }
 
 function UsageTab({ ar, data }: { ar: boolean; data: Account }) {
@@ -192,6 +196,7 @@ function SettingsTab({ ar, data, fmt, reload, refreshSession, go, setNotice }: {
   const [pw, setPw] = useState({ currentPassword: '', newPassword: '' });
   const [del, setDel] = useState({ password: '', confirm: '' });
   const [sessions, setSessions] = useState<SessionRow[]>([]);
+  const [askDel, setAskDel] = useState(false);
   const [error, setError] = useState('');
   const loadSessions = useCallback(() => password ? api<{ sessions: SessionRow[] }>('/api/auth/sessions').then(r => setSessions(r.sessions)).catch(() => {}) : Promise.resolve(), [password]);
   useEffect(() => { loadSessions(); }, [loadSessions]);
@@ -201,11 +206,12 @@ function SettingsTab({ ar, data, fmt, reload, refreshSession, go, setNotice }: {
     {password && <><div className="dash-panel"><h3>{tr('تغيير كلمة المرور', 'Change password')}</h3><form className="auth-form" onSubmit={e => { e.preventDefault(); run(async () => { await api('/api/account/password', { method: 'POST', body: pw }); setPw({ currentPassword: '', newPassword: '' }); await loadSessions(); }, tr('تم تغيير كلمة المرور.', 'Password changed.')); }}>
       <label>{tr('الحالية', 'Current')}<input type="password" autoComplete="current-password" required value={pw.currentPassword} onChange={e => setPw({ ...pw, currentPassword: e.target.value })} /></label>
       <label>{tr('الجديدة', 'New')}<input type="password" autoComplete="new-password" minLength={10} required value={pw.newPassword} onChange={e => setPw({ ...pw, newPassword: e.target.value })} /></label><button className="button-dark">{tr('تغيير', 'Change')}</button></form></div>
-      <div className="dash-panel"><h3>{tr('الجلسات', 'Sessions')}</h3><div className="rows">{sessions.map(s => <div key={s.id}><span><b>{s.current ? tr('هذا الجهاز', 'This device') : (s.userAgent || 'Unknown').slice(0, 60)}</b><small>{s.ip} · {fmt(s.lastSeenAt)}</small></span>{!s.current && <button aria-label="Revoke session" onClick={() => run(async () => { await api('/api/auth/sessions', { method: 'DELETE', body: { id: s.id } }); await loadSessions(); }, tr('أُنهيت الجلسة.', 'Session ended.'))}><Trash2 size={16} /></button>}</div>)}</div>
+      <div className="dash-panel"><h3>{tr('الجلسات', 'Sessions')}</h3><div className="rows">{sessions.map(s => <div key={s.id}><span><b>{s.current ? tr('هذا الجهاز', 'This device') : (s.userAgent || 'Unknown').slice(0, 60)}</b><small>{s.ip} · {fmt(s.lastSeenAt)}</small></span>{!s.current && <button aria-label={tr('إنهاء الجلسة', 'End session')} onClick={() => run(async () => { await api('/api/auth/sessions', { method: 'DELETE', body: { id: s.id } }); await loadSessions(); }, tr('أُنهيت الجلسة.', 'Session ended.'))}><Trash2 size={16} /></button>}</div>)}</div>
         <button className="pill-link" onClick={() => run(async () => { await api('/api/auth/sessions', { method: 'DELETE', body: { others: true } }); await loadSessions(); }, tr('أُنهيت الجلسات الأخرى.', 'Other sessions ended.'))}>{tr('إنهاء كل الجلسات الأخرى', 'Sign out other devices')}</button></div></>}
     <div className="dash-panel"><h3>{tr('تسجيل الخروج', 'Sign out')}</h3>{password ? <button className="button-dark" onClick={async () => { await api('/api/auth/logout', { method: 'POST', body: {} }); await refreshSession(); go('home'); }}>{tr('خروج', 'Sign out')}</button> : /* Hosting-platform route: full page load required. */ /* eslint-disable-line @next/next/no-html-link-for-pages */ <a className="pill-link" href="/signout-with-chatgpt?return_to=%2F" target="_top">{tr('خروج من ChatGPT', 'Sign out of ChatGPT')}</a>}</div>
     <div className="dash-panel danger"><h3>{tr('حذف الحساب', 'Delete account')}</h3><p className="muted">{tr('يُلغي المفاتيح ويمسح بياناتك الشخصية. يُحتفظ بسجلات الفوترة للمحاسبة. لا يمكن التراجع.', 'Revokes your keys and erases personal data. Billing records are kept for accounting. This cannot be undone.')}</p>
-      <form className="auth-form" onSubmit={e => { e.preventDefault(); if (!confirm(tr('حذف الحساب نهائيًا؟', 'Delete your account permanently?'))) return; run(async () => { await api('/api/account', { method: 'DELETE', body: { password: del.password || undefined, confirm: del.confirm } }); await refreshSession(); go('home'); }, ''); }}>
+      <form className="auth-form" onSubmit={e => { e.preventDefault(); setAskDel(true); }}>
         {password && <label>{tr('كلمة المرور', 'Password')}<input type="password" required value={del.password} onChange={e => setDel({ ...del, password: e.target.value })} /></label>}
-        <label>{tr('اكتب DELETE للتأكيد', 'Type DELETE to confirm')}<input required value={del.confirm} onChange={e => setDel({ ...del, confirm: e.target.value })} /></label><button className="button-dark" disabled={del.confirm !== 'DELETE'}>{tr('حذف الحساب', 'Delete account')}</button></form></div></>;
+        <label>{tr('اكتب DELETE للتأكيد', 'Type DELETE to confirm')}<input required value={del.confirm} onChange={e => setDel({ ...del, confirm: e.target.value })} /></label><button className="button-dark" disabled={del.confirm !== 'DELETE'}>{tr('حذف الحساب', 'Delete account')}</button></form>
+      {askDel && <ConfirmDialog title={tr('حذف الحساب', 'Delete account')} message={tr('حذف الحساب نهائيًا؟ تُلغى المفاتيح وتُمسح بياناتك الشخصية، ولا يمكن التراجع.', 'Delete your account permanently? Keys are revoked and personal data is erased. This cannot be undone.')} confirmLabel={tr('حذف الحساب', 'Delete account')} cancelLabel={tr('رجوع', 'Cancel')} onCancel={() => setAskDel(false)} onConfirm={() => { setAskDel(false); run(async () => { await api('/api/account', { method: 'DELETE', body: { password: del.password || undefined, confirm: del.confirm } }); await refreshSession(); go('home'); }, ''); }} />}</div></>;
 }
