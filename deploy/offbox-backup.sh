@@ -44,13 +44,14 @@ if [[ -z "$TARGET" ]]; then
 fi
 [[ "$AUDIT_DAYS" =~ ^[0-9]+$ && "$AUDIT_DAYS" -ge 1 ]] || { echo "OFFBOX_AUDIT_DAYS must be a whole number of at least 1" >&2; exit 2; }
 
-# ---- parse the target (strict patterns: no spaces, no quotes, nothing the remote shell could read as code) ----
+# ---- parse the target (strict patterns: no spaces, no quotes, nothing the remote shell could read as code;
+#      user, host and remote never start with a dash, so ssh and rclone cannot read them as options) ----
 KIND=""; RHOST=""; RBASE=""
-if [[ "$TARGET" =~ ^ssh:(([A-Za-z0-9._-]+@)?[A-Za-z0-9.-]+):(/[A-Za-z0-9._/-]*)$ ]]; then
+if [[ "$TARGET" =~ ^ssh:(([A-Za-z0-9._][A-Za-z0-9._-]*@)?[A-Za-z0-9][A-Za-z0-9.-]*):(/[A-Za-z0-9._/-]*)$ ]]; then
   KIND="ssh"; RHOST="${BASH_REMATCH[1]}"; RBASE="${BASH_REMATCH[3]%/}"
 elif [[ "$TARGET" =~ ^s3://[A-Za-z0-9._-]+(/[A-Za-z0-9._/-]*)?$ ]]; then
   KIND="s3"; RBASE="${TARGET%/}"
-elif [[ "$TARGET" =~ ^rclone:([A-Za-z0-9_.-]+:[A-Za-z0-9._/-]*)$ ]]; then
+elif [[ "$TARGET" =~ ^rclone:([A-Za-z0-9_.][A-Za-z0-9_.-]*:[A-Za-z0-9._/-]*)$ ]]; then
   KIND="rclone"; RBASE="${BASH_REMATCH[1]%/}"
 else
   echo "OFFBOX_TARGET is not in a supported form (ssh:user@host:/folder, s3://bucket/prefix, rclone:remote:path)" >&2

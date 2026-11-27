@@ -91,6 +91,15 @@ run env OFFBOX_TARGET='ftp://nope' bash "$ROOT/deploy/offbox-backup.sh"
 run env OFFBOX_TARGET='ssh:u@h:/x; rm -rf /' bash "$ROOT/deploy/offbox-backup.sh"
 [[ "$RC" -eq 2 ]]; check "target with shell characters is refused" "$?"
 
+run env OFFBOX_TARGET='ssh:-oProxyCommand=x:/srv/x' bash "$ROOT/deploy/offbox-backup.sh"
+[[ "$RC" -eq 2 ]]; check "host starting with a dash is refused" "$?"
+
+run env OFFBOX_TARGET='ssh:-u@h:/srv/x' bash "$ROOT/deploy/offbox-backup.sh"
+[[ "$RC" -eq 2 ]]; check "user starting with a dash is refused" "$?"
+
+run env OFFBOX_TARGET='rclone:-x:path' bash "$ROOT/deploy/offbox-backup.sh"
+[[ "$RC" -eq 2 ]]; check "rclone remote starting with a dash is refused" "$?"
+
 mkdir -p "$BK/audit-exports"
 touch "$BK/app-20260101-000000.sqlite" "$BK/app-20260102-000000.sqlite" "$BK/pre-rollback-x.sqlite"
 for d in 01 02 03 04; do touch "$BK/audit-exports/audit-2026-01-$d.jsonl"; done
