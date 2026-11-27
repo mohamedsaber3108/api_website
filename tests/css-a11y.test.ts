@@ -93,6 +93,44 @@ describe('letter-spacing', () => {
   });
 });
 
+describe('focus-visible (UX-A6)', () => {
+  const focus = /(:is\(a,button[^{]*\):focus-visible)\{([^}]*)\}/.exec(css);
+  const focusLight = /:root\{--focus:(#[0-9a-f]{6})\}/.exec(css)?.[1] ?? '';
+  const focusDark = /:root\[data-theme="dark"\]\{--focus:(#[0-9a-f]{6})\}/.exec(css)?.[1] ?? '';
+  const bgOf = (sel: string) => new RegExp('(?:^|[}\\s])' + sel.replace(/\./g, '\\.') + '\\{[^}]*?background:(#[0-9a-f]{6})').exec(css)?.[1] ?? '';
+
+  it('one rule covers every interactive control, and it beats any outline removal', () => {
+    expect(focus).not.toBeNull();
+    for (const s of ['a', 'button', 'input', 'select', 'textarea', '[role="button"]', '[role="tab"]']) expect(focus![1]).toContain(s);
+    expect(focus![2]).toContain('outline:2px solid var(--focus)!important');
+  });
+  it('the currency select no longer removes its outline', () => {
+    const body = /\.select-wrap select\{([^}]*)\}/.exec(css)?.[1] ?? '';
+    expect(body).not.toBe('');
+    expect(body).not.toMatch(/outline:(none|0)/);
+  });
+  it('focus colour is at least 3:1 on every light and dark surface', () => {
+    for (const bg of ['bg', 'surface', 'surface-alt', 'peach']) {
+      expect(ratio(focusLight, light[bg]), `light ${bg}`).toBeGreaterThanOrEqual(3);
+      expect(ratio(focusDark, dark[bg]), `dark ${bg}`).toBeGreaterThanOrEqual(3);
+    }
+  });
+  it('focus colour on the always-dark surfaces and the orange banner is at least 3:1', () => {
+    for (const sel of ['.feature-main', '.calc-result', '.code-block', '.site-footer', '.compare-bar']) {
+      const bg = bgOf(sel);
+      expect(bg, sel).not.toBe('');
+      expect(ratio('#ffc8b1', bg), sel).toBeGreaterThanOrEqual(3);
+    }
+    expect(ratio('#ffffff', '#ee6439')).toBeGreaterThanOrEqual(3);
+  });
+  it('the mobile menu holds the theme control and the menu button reports its state', () => {
+    const src = readFileSync(path.resolve(__dirname, '../app/wasl-app.tsx'), 'utf8');
+    expect(src).toContain('className="mobile-theme"');
+    expect(src).toContain('aria-expanded={menu}');
+    expect(src).toContain('aria-label={isAr ? "القائمة" : "Menu"}');
+  });
+});
+
 describe('reduced motion', () => {
   it('stops infinite animations and hover movement', () => {
     const m = /@media\(prefers-reduced-motion:reduce\)\{([\s\S]*?)\}\}/.exec(css);

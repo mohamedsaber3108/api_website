@@ -1,7 +1,8 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { CheckCircle2, LockKeyhole, Mail, UserPlus } from 'lucide-react';
-import { api, errorMessage, type SessionInfo } from '../lib/client-api';
+import { CheckCircle2, Eye, EyeOff, LockKeyhole, Mail, UserPlus } from 'lucide-react';
+import { api, ApiError, errorMessage, type SessionInfo } from '../lib/client-api';
+import { errorFields, type AuthField } from '../lib/auth-errors';
 import { SESSION_REASONS, sessionReasonFrom } from '../lib/session-reason';
 
 export type AuthMode = 'login' | 'register' | 'forgot-password' | 'reset-password' | 'verify-email';
@@ -17,6 +18,8 @@ export default function AuthPage({ mode, lang, session, go, onChanged }: Props) 
   const reason = mode === 'login' && typeof window !== 'undefined' ? sessionReasonFrom(location.search) : null;
   const [busy, setBusy] = useState(mode === 'verify-email' && !!token);
   const [error, setError] = useState('');
+  const [errorCode, setErrorCode] = useState<string | undefined>();
+  const [showPw, setShowPw] = useState(false);
   const [info, setInfo] = useState('');
   const [credit, setCredit] = useState('');
   const [devToken, setDevToken] = useState('');
@@ -38,7 +41,7 @@ export default function AuthPage({ mode, lang, session, go, onChanged }: Props) 
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    setBusy(true); setError(''); setInfo(''); setDevToken('');
+    setBusy(true); setError(''); setErrorCode(undefined); setInfo(''); setDevToken('');
     try {
       if (mode === 'login') {
         await api('/api/auth/login', { method: 'POST', body: { email: form.email, password: form.password } });
@@ -56,7 +59,7 @@ export default function AuthPage({ mode, lang, session, go, onChanged }: Props) 
         setCredit(bonusText(r.bonus, false));
         setInfo(tr('تم تغيير كلمة المرور. سجّل الدخول بها الآن.', 'Password changed. You can sign in now.'));
       }
-    } catch (err) { setError(errorMessage(err)); } finally { setBusy(false); }
+    } catch (err) { setError(errorMessage(err)); setErrorCode(err instanceof ApiError ? err.code : undefined); } finally { setBusy(false); }
   }
 
   const titles: Record<AuthMode, [string, string]> = {
@@ -68,6 +71,10 @@ export default function AuthPage({ mode, lang, session, go, onChanged }: Props) 
   };
   const Icon = mode === 'register' ? UserPlus : mode === 'verify-email' ? Mail : LockKeyhole;
   const alreadyIn = session?.user && (mode === 'login' || mode === 'register');
+  const bad = errorFields(errorCode);
+  // Every field points at the error text; only the fields the error names are marked invalid.
+  const fa = (f: AuthField) => ({ 'aria-invalid': bad.includes(f) || undefined, 'aria-describedby': error ? 'auth-error' : undefined });
+  const busyText = mode === 'login' ? tr('جارٍ الدخول…', 'Signing in…') : mode === 'register' ? tr('جارٍ الإنشاء…', 'Creating…') : mode === 'reset-password' ? tr('جارٍ الحفظ…', 'Saving…') : tr('جارٍ الإرسال…', 'Sending…');
 
   return <main className="inner-page"><section className="page-heading section"><span className="section-kicker">WASL / ACCOUNT</span><h1>{tr(...titles[mode])}</h1><div className="page-heading-art"><Icon /></div></section>
     <section className="section auth-wrap"><div className="auth-card">
@@ -76,15 +83,15 @@ export default function AuthPage({ mode, lang, session, go, onChanged }: Props) 
       : devToken && mode === 'register' ? <div className="auth-done"><CheckCircle2 size={26} /><p>{tr('تم إنشاء الحساب. وضع التطوير: لم يُرسل بريد، استخدم هذا الرابط للتأكيد.', 'Account created. Dev mode: no email was sent, use this link to verify.')}</p><a className="pill-link" href={`/verify-email?token=${devToken}`}>/verify-email?token=…</a></div>
       : info && mode === 'reset-password' ? <div className="auth-done"><CheckCircle2 size={26} /><p>{info}</p>{credit && <p role="status">{credit}</p>}<button className="button-primary" onClick={() => go('login')}>{tr('تسجيل الدخول', 'Sign in')}</button></div>
       : <form onSubmit={submit} className="auth-form">
-        {mode === 'register' && <label>{tr('الاسم', 'Name')}<input required minLength={2} maxLength={80} autoComplete="name" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} /></label>}
-        {mode !== 'reset-password' && <label>{tr('البريد الإلكتروني', 'Email')}<input required type="email" autoComplete="email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} /></label>}
-        {mode !== 'forgot-password' && <label>{mode === 'reset-password' ? tr('كلمة المرور الجديدة', 'New password') : tr('كلمة المرور', 'Password')}<input required type="password" minLength={mode === 'login' ? 1 : 10} maxLength={200} autoComplete={mode === 'login' ? 'current-password' : 'new-password'} value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} />{mode !== 'login' && <small>{tr('10 أحرف على الأقل.', 'At least 10 characters.')}</small>}</label>}
+        {mode === 'register' && <label>{tr('الاسم', 'Name')}<input required minLength={2} maxLength={80} autoComplete="name" {...fa('name')} value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} /></label>}
+        {mode !== 'reset-password' && <label>{tr('البريد الإلكتروني', 'Email')}<input required type="email" dir="ltr" autoComplete="email" {...fa('email')} value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} /></label>}
+        {mode !== 'forgot-password' && <label><span id="auth-pw-label">{mode === 'reset-password' ? tr('كلمة المرور الجديدة', 'New password') : tr('كلمة المرور', 'Password')}</span><span className="pw-row"><input required type={showPw ? 'text' : 'password'} dir="ltr" aria-labelledby="auth-pw-label" minLength={mode === 'login' ? 1 : 10} maxLength={200} autoComplete={mode === 'login' ? 'current-password' : 'new-password'} {...fa('password')} value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} /><button type="button" className="pw-toggle" aria-pressed={showPw} aria-label={tr('إظهار كلمة المرور', 'Show password')} title={tr('إظهار كلمة المرور', 'Show password')} onClick={() => setShowPw(!showPw)}>{showPw ? <EyeOff size={18} /> : <Eye size={18} />}</button></span>{mode !== 'login' && <small>{tr('10 أحرف على الأقل.', 'At least 10 characters.')}</small>}</label>}
         {mode === 'register' && <label className="auth-check"><input type="checkbox" required checked={form.accept} onChange={e => setForm({ ...form, accept: e.target.checked })} /><span>{tr('أوافق على ', 'I agree to the ')}<button type="button" className="link" onClick={() => go('terms')}>{tr('شروط الخدمة', 'Terms of Service')}</button>{tr(' و', ' and ')}<button type="button" className="link" onClick={() => go('privacy')}>{tr('سياسة الخصوصية', 'Privacy Policy')}</button></span></label>}
-        {error && <p className="live-error" role="alert">{error}</p>}
+        {error && <p id="auth-error" className="live-error" role="alert">{error}</p>}
         {reason && <p className="auth-info" role="status">{SESSION_REASONS[reason][lang]}</p>}
         {info && <p className="auth-info" role="status">{info}</p>}
         {devToken && mode === 'forgot-password' && <a className="pill-link" href={`/reset-password?token=${devToken}`}>{tr('وضع التطوير: افتح رابط إعادة التعيين', 'Dev mode: open the reset link')}</a>}
-        <button className="button-primary" disabled={busy}>{busy ? '…' : mode === 'login' ? tr('تسجيل الدخول', 'Sign in') : mode === 'register' ? tr('إنشاء الحساب', 'Create account') : mode === 'forgot-password' ? tr('أرسل الرابط', 'Send reset link') : tr('حفظ كلمة المرور', 'Save password')}</button>
+        <button className="button-primary" disabled={busy} aria-busy={busy}>{busy ? busyText : mode === 'login' ? tr('تسجيل الدخول', 'Sign in') : mode === 'register' ? tr('إنشاء الحساب', 'Create account') : mode === 'forgot-password' ? tr('أرسل الرابط', 'Send reset link') : tr('حفظ كلمة المرور', 'Save password')}</button>
         <div className="auth-links">
           {mode === 'login' && <><button type="button" onClick={() => go('forgot-password')}>{tr('نسيت كلمة المرور؟', 'Forgot password?')}</button><button type="button" onClick={() => go('register')}>{tr('إنشاء حساب جديد', 'Create an account')}</button></>}
           {mode === 'register' && <button type="button" onClick={() => go('login')}>{tr('لدي حساب بالفعل', 'I already have an account')}</button>}
