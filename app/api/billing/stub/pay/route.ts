@@ -22,6 +22,7 @@ export const POST = handle(async request => {
   const [p] = await db.select().from(payments).where(and(eq(payments.providerSessionId, sessionId), eq(payments.provider, 'stub'), eq(payments.userId, user.userId))).limit(1);
   if (!p) return fail(404, 'Payment not found', 'payment_not_found');
   if (p.status !== 'pending' && p.status !== 'paid') return fail(409, 'This payment can no longer be paid', 'payment_not_payable');
-  await completePayment(p.id, `stub_pi_${p.id}`);
+  // The stub has no outside charge, so it "pays" exactly what was stored; the amount check is real for Stripe.
+  await completePayment(p.id, `stub_pi_${p.id}`, { amountMinor: p.amountMinor, currency: p.currency });
   return json({ paid: true, paymentId: p.id });
 });

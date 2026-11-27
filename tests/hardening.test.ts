@@ -96,7 +96,7 @@ describe('FU-2: webhook errors are stored redacted', () => {
     const u = await makeUser();
     const id = `pay_h_${u.userId}`;
     await getDb().insert(payments).values({ id, userId: u.userId, provider: 'stripe', amountMinor: 1000, currency: 'usd', creditMicroUsd: 10_000_000, status: 'pending', createdAt: Date.now() });
-    const ev = { id: `evt_h_${id}`, type: 'checkout.session.completed', data: { object: { id: 'cs_h', client_reference_id: id, payment_status: 'paid', payment_intent: 'pi_h' } } };
+    const ev = { id: `evt_h_${id}`, type: 'checkout.session.completed', data: { object: { id: 'cs_h', client_reference_id: id, payment_status: 'paid', payment_intent: 'pi_h', amount_total: 1000, currency: 'usd' } } };
     const raw = JSON.stringify(ev);
     const t = Math.floor(Date.now() / 1000);
     const sig = `t=${t},v1=${await hmacSha256Hex(SECRET, `${t}.${raw}`)}`;
