@@ -165,7 +165,7 @@ describe('FEAT-2 limits route', () => {
     const otherKey = await newKey(other.userId);
     expect((await put(u.cookie, { scope: 'account', limitUsd: 100_000 })).status).toBe(200);
     expect((await put(u.cookie, { scope: 'key', keyId: otherKey, limitUsd: 1 })).status).toBe(404);
-    const r = await limitsPut(req('/api/account/limits', { method: 'PUT', cookie: u.cookie, body: { scope: 'account', limitUsd: 1 }, headers: { origin: 'https://evil.example' } }), noCtx);
+    const r = await limitsPut(req('/api/account/limits', { method: 'PUT', cookie: u.cookie, body: { scope: 'account', limitUsd: 1 }, origin: false, headers: { origin: 'https://evil.example' } }), noCtx);
     expect(r.status).toBe(403);
   });
 
