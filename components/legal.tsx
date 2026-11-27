@@ -1,13 +1,12 @@
 'use client';
 import { FileText } from 'lucide-react';
+import { LEGAL_VERSIONS } from '../lib/legal-versions';
 
 export type LegalPage = 'terms' | 'privacy' | 'refund' | 'acceptable-use';
 type Lang = 'ar' | 'en';
 type Section = { h: string; p: string[] };
 type Doc = { title: string; intro: string; sections: Section[] };
 
-/** Must match TERMS_VERSION in lib/server/config.ts, which is recorded on each account at sign-up. */
-export const LEGAL_VERSION = '2026-10-01';
 
 const COMPANY = '[COMPANY LEGAL NAME]';
 const CONTACT = '[legal@your-domain]';
@@ -124,7 +123,7 @@ export default function Legal({ page, lang, go }: { page: LegalPage; lang: Lang;
   const d = docs[page][lang];
   return <main className="inner-page"><section className="page-heading section"><span className="section-kicker">WASL / LEGAL</span><h1>{d.title}</h1><p>{d.intro}</p><div className="page-heading-art"><FileText /></div></section>
     <section className="section legal-layout"><aside className="dash-nav">{LEGAL_PAGES.map(p => <button key={p} className={p === page ? 'dash-selected' : ''} onClick={() => go(p)}>{docs[p][lang].title}</button>)}</aside>
-      <article className="legal-doc"><p className="muted">{ar ? 'الإصدار' : 'Version'} {LEGAL_VERSION}</p>
+      <article className="legal-doc"><p className="muted">{ar ? 'الإصدار' : 'Version'} <bdi>{LEGAL_VERSIONS[page].version}</bdi>{ar ? '، ساري من ' : ', effective '}<bdi>{LEGAL_VERSIONS[page].effective}</bdi></p>
         {d.sections.map(s => <section key={s.h}><h2>{s.h}</h2>{s.p.length > 1 && s.h.match(/Not allowed|What we collect|غير مسموح|ما نجمعه/) ? <ul>{s.p.map(x => <li key={x}>{x}</li>)}</ul> : s.p.map(x => <p key={x}>{x}</p>)}</section>)}
       </article></section></main>;
 }

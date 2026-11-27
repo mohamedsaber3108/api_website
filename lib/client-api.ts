@@ -25,7 +25,7 @@ export async function api<T = unknown>(path: string, { method = 'GET', body }: O
 export type SessionUser = { id: string; email: string; name: string; role: 'customer' | 'support' | 'admin' | 'super_admin'; provider: 'password' | 'chatgpt'; emailVerified: boolean };
 /** Staff only: epoch milliseconds when the idle and absolute limits end, and the server clock when this was sent. */
 export type SessionLimits = { idleEndsAt: number; absoluteEndsAt: number; now: number };
-export type SessionInfo = { user: SessionUser | null; features: { inference: boolean; billing: boolean; email: boolean; chatgpt?: boolean }; sessionLimits?: SessionLimits };
+export type SessionInfo = { user: SessionUser | null; termsUpdateRequired?: boolean; currentTermsVersion?: string; features: { inference: boolean; billing: boolean; email: boolean; chatgpt?: boolean }; sessionLimits?: SessionLimits };
 
 export function usd(micro: number, digits = 2): string {
   return `$${(micro / 1_000_000).toFixed(digits)}`;

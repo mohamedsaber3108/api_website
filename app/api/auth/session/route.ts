@@ -1,8 +1,9 @@
 import { eq } from 'drizzle-orm';
 import { getDb } from '../../../../db';
-import { sessions } from '../../../../db/schema';
+import { accounts, sessions } from '../../../../db/schema';
 import { getPrincipal, publicUser, requireUser } from '../../../../lib/server/auth';
 import { features, STAFF_IDLE_MS } from '../../../../lib/server/config';
+import { TERMS_VERSION, termsUpdateRequired } from '../../../../lib/legal-versions';
 import { inferenceEnabled } from '../../../../lib/server/flags';
 import { handle, json, requireSameOrigin } from '../../../../lib/server/http';
 
@@ -15,8 +16,14 @@ export const dynamic = 'force-dynamic';
 export const GET = handle(async request => {
   const peek = new URL(request.url).searchParams.get('peek') === '1';
   const p = await getPrincipal(request, { peek });
+  let terms: { termsUpdateRequired: boolean; currentTermsVersion: string } | null = null;
+  if (p) {
+    const [a] = await getDb().select({ v: accounts.termsVersion }).from(accounts).where(eq(accounts.userId, p.userId)).limit(1);
+    terms = { termsUpdateRequired: termsUpdateRequired(a?.v), currentTermsVersion: TERMS_VERSION };
+  }
   return json({
     user: p ? publicUser(p) : null,
+    ...(terms ?? {}),
     features: { inference: await inferenceEnabled(), billing: features.billing(), email: features.email(), chatgpt: features.chatgptIdentity() },
     ...(p?.sessionEnds ? { sessionLimits: { ...p.sessionEnds, now: Date.now() } } : {}),
   });

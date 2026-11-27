@@ -13,6 +13,7 @@ import Dashboard from "../components/dashboard";
 import AdminConsole from "../components/admin";
 import Legal, { LEGAL_PAGES, legalTitle, type LegalPage } from "../components/legal";
 import { api, type SessionInfo } from "../lib/client-api";
+import TermsBanner from "../components/terms-banner";
 import { langCookie, langFromCookieHeader } from "../lib/lang";
 import { fmtNum } from "../lib/format";
 import { CustomerSupport, TrustCenter, UseCases } from "../components/customer-center";
@@ -148,7 +149,7 @@ export default function WaslApp({ initialLang = "ar" }: { initialLang?: Lang }) 
   function ModelCard({m}:{m:CatalogModel}) { return <CatalogCard m={m} lang={lang} currency={currency} rates={rates} onOpen={()=>showModel(m)}/>; }
 
   return <div className="site-shell">
-    <div className="announcement"><span className="announcement-pulse" />{t.notice}<button onClick={() => go("docs")}>{t.noticeLink} <ArrowUpRight size={13} /></button></div>
+    {session?.user && session.termsUpdateRequired && <TermsBanner lang={lang} onReview={() => go("terms")} onAccepted={refreshSession} />}<div className="announcement"><span className="announcement-pulse" />{t.notice}<button onClick={() => go("docs")}>{t.noticeLink} <ArrowUpRight size={13} /></button></div>
     <header className="site-header"><div className="nav-inner">
       <button className="brand" onClick={() => go("home")} aria-label={isAr ? "وصل، الصفحة الرئيسية" : "Wasl AI home"}><IconLogo /><span>wasl<span className="brand-dot">.</span><small>AI</small></span></button>
       <nav className="desktop-nav" aria-label={isAr ? "التنقل الرئيسي" : "Primary navigation"}>{(["models", "providers", "rankings", "pricing", "playground", "docs"] as Page[]).map(p => <button key={p} className={page === p ? "active" : ""} aria-current={page === p ? "page" : undefined} onClick={() => go(p)}>{t.nav[p]}</button>)}</nav>
