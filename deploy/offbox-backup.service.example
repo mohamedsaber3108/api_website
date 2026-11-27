@@ -1,0 +1,22 @@
+# EXAMPLE ONLY (OPS-5). Not installed, not run by any script in this repo.
+# Pairs with offbox-backup.timer.example (also disabled). No destination is chosen yet: that is an owner decision.
+# Setup by a person on the server, after the owner picks a destination:
+#   1. Create a user for it (for example: wasl-offbox) that can READ /var/backups/wasl and nothing else.
+#   2. Create /etc/wasl/offbox.env (mode 600, owner root), for example one line:  OFFBOX_TARGET=ssh:backup@host.example:/srv/wasl
+#      plus the credentials its kind needs (an ssh key file path in OFFBOX_SSH_KEY, or AWS_* variables). Never in git or in a chat.
+#   3. Copy this file to /etc/systemd/system/ and run: systemctl daemon-reload
+# With OFFBOX_TARGET unset the script exits 0 and copies nothing.
+[Unit]
+Description=Copy the latest database backup and audit exports off this box
+
+[Service]
+Type=oneshot
+User=wasl-offbox
+EnvironmentFile=/etc/wasl/offbox.env
+ExecStart=/usr/bin/bash /opt/wasl/current/deploy/offbox-backup.sh
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+# Read only: this unit never changes the local backups.
+ReadOnlyPaths=/var/backups/wasl
