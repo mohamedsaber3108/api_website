@@ -32,7 +32,7 @@ afterEach(() => { vi.unstubAllGlobals(); for (const k of ['INFERENCE_ENABLED', '
 
 let providerReply: Record<string, unknown> = {};
 const reply = (usage: Record<string, unknown>) => { providerReply = { id: 'gen-1', provider: 'X', choices: [{ message: { role: 'assistant', content: 'hi' } }], usage }; };
-const body = (extra: object = {}) => ({ model: MODEL, messages: [{ role: 'user', content: 'hello' }], max_tokens: 100, ...extra });
+const body = (extra: object = {}) => ({ model: MODEL, messages: [{ role: 'user', content: 'hello' }], max_tokens: 4000, ...extra }); // worst case ~2.9k micro, so provider costs up to that are charged in full (the hold caps a charge)
 
 async function funded(micro = 10_000_000) {
   const u = await makeUser();
@@ -73,16 +73,23 @@ describe('chargeMicro (through runChat, provider stubbed)', () => {
     env.DEFAULT_MARKUP_PERCENT = '9999';
     expect((await charge(u.userId, { cost: 0.001 })).charged).toBe(1200);
   });
-  it('FINDING: floating point can overcharge by 1 micro-USD (50 micro at 10% -> 56, expected 55)', async () => {
-    // 50 * (1 + 10/100) = 55.00000000000001 in JS, and Math.ceil makes it 56. Report only; not fixed here.
+  it('rounds with integers: provider 50 micro at 10% markup charges exactly 55', async () => {
+    // 50 * (1 + 10/100) is 55.00000000000001 in floating point; the old Math.ceil charged 56.
     const u = await funded();
     env.DEFAULT_MARKUP_PERCENT = '10';
-    expect((await charge(u.userId, { cost: 0.00005 })).charged).toBe(56);
+    expect((await charge(u.userId, { cost: 0.00005 })).charged).toBe(55);
   });
-  it('FINDING: a provider cost under 0.5 micro-USD rounds to 0 and the call is free', async () => {
+  it('a provider cost above 0 but under 0.5 micro-USD still charges at least 1 micro-USD', async () => {
     const u = await funded();
-    const { charged } = await charge(u.userId, { prompt_tokens: 5, completion_tokens: 5, cost: 0.0000004 });
-    expect(charged).toBe(0);
+    const { charged, ctx } = await charge(u.userId, { prompt_tokens: 5, completion_tokens: 5, cost: 0.0000004 });
+    expect(charged).toBeGreaterThanOrEqual(1);
+    const [ev] = await getDb().select().from(usageEvents).where(eq(usageEvents.requestId, ctx.requestId));
+    expect(ev.providerCostMicroUsd).toBe(1);
+    expect(ev.costMicroUsd).toBe(charged);
+  });
+  it('a provider cost of exactly 0 stays free', async () => {
+    const u = await funded();
+    expect((await charge(u.userId, { prompt_tokens: 5, completion_tokens: 5, cost: 0 })).charged).toBe(0);
   });
   it('hides the provider cost, provider name and cost details from the customer', async () => {
     const u = await funded();
@@ -175,5 +182,4 @@ describe('gateway preconditions and error codes', () => {
     expect((await fail(418, 'teapot').json()).code).toBe('http_418');
   });
   it.todo('Arabic and English messages: the API returns English messages only today (no Arabic strings under lib/ or app/api). Add when the localisation task lands.');
-  it.todo('20 parallel gateway calls cannot overspend the balance (needs the SEC-1 hold; pending prompt 003)');
 });

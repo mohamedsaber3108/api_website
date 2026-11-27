@@ -6,12 +6,12 @@ import { accounts, apiKeys, modelConfigs, usageEvents } from '../../db/schema';
 import { defaultMarkupPercent, features } from './config';
 import { sha256Hex } from './crypto';
 import { findModel } from './catalog';
-import { getBalanceMicroUsd, ledgerInsert } from './ledger';
+import { closeHold, getAvailableMicroUsd, ledgerInsert, reserveCredit } from './ledger';
 import { rateLimit } from './ratelimit';
 import { HttpError } from './http';
 
 export class GatewayError extends Error {
-  constructor(public status: number, public code: string, message: string, public headers: Record<string, string> = {}) {
+  constructor(public status: number, public code: string, message: string, public headers: Record<string, string> = {}, public extra: Record<string, number> = {}) {
     super(message);
   }
 }
@@ -27,7 +27,7 @@ export function gatewayErrorResponse(e: unknown): Response {
     console.error('Gateway failure', e instanceof Error ? `${e.name}: ${e.message}` : e);
     return Response.json({ error: { message: 'Internal server error', type: 'server_error', code: 'internal_error' } }, { status: 500, headers: { 'Cache-Control': 'no-store' } });
   }
-  return Response.json({ error: { message: g.message, type: g.status >= 500 ? 'server_error' : 'invalid_request_error', code: g.code } }, { status: g.status, headers: { 'Cache-Control': 'no-store', ...g.headers } });
+  return Response.json({ error: { message: g.message, type: g.status >= 500 ? 'server_error' : 'invalid_request_error', code: g.code, ...g.extra } }, { status: g.status, headers: { 'Cache-Control': 'no-store', ...g.headers } });
 }
 
 export type ApiKeyAuth = { userId: string; keyId: string; scopes: string[]; rateLimitPerMin: number };
@@ -89,8 +89,23 @@ type Usage = { prompt_tokens?: number; completion_tokens?: number; cost?: number
 
 type Billing = { inPrice: number; outPrice: number; markup: number };
 
+/** Integer maths only (basis points): 50 micro at 10% is exactly 55, not 55.00000000000001 rounded up to 56. */
 function chargeMicro(providerMicro: number, markup: number): number {
-  return providerMicro <= 0 ? 0 : Math.max(1, Math.ceil(providerMicro * (1 + markup / 100)));
+  if (providerMicro <= 0) return 0;
+  const bp = Math.round(markup * 100);
+  return Math.max(1, Math.floor((providerMicro * (10_000 + bp) + 9_999) / 10_000));
+}
+
+/** Where a customer adds credit. Used in the 402 message. */
+function addCreditLink(): string {
+  return `${(env.PUBLIC_BASE_URL || '').replace(/\/+$/, '')}/dashboard`;
+}
+
+function insufficientCreditsMessage(needMicro: number, availableMicro: number): string {
+  const need = `$${(needMicro / 1e6).toFixed(4)}`;
+  const have = `$${(Math.max(availableMicro, 0) / 1e6).toFixed(4)}`;
+  const link = addCreditLink();
+  return `Your balance is too low for this request (it can cost up to ${need}; available ${have}). | رصيدك غير كافٍ لهذا الطلب (قد تصل تكلفته إلى ${need}، والمتاح ${have}). Add credit / أضف رصيداً: ${link}`;
 }
 
 async function resolveBilling(modelId: string): Promise<Billing> {
@@ -113,12 +128,14 @@ export type ChatContext = {
   startedAt: number;
 };
 
-async function recordUsage(ctx: ChatContext, model: string, billing: Billing, usage: Usage | null, fallbackInTokens: number, fallbackOutChars: number, status: 'ok' | 'error' | 'aborted') {
+/** `holdMicro` is the credit reserved for this request (null when none was needed). The charge never exceeds it, so the balance cannot go below zero. */
+async function recordUsage(ctx: ChatContext, model: string, billing: Billing, usage: Usage | null, fallbackInTokens: number, fallbackOutChars: number, status: 'ok' | 'error' | 'aborted', holdMicro: number | null) {
   const inTokens = usage?.prompt_tokens ?? fallbackInTokens;
   const outTokens = usage?.completion_tokens ?? Math.ceil(fallbackOutChars / 3);
   const computed = Math.round(inTokens * billing.inPrice + outTokens * billing.outPrice);
-  const providerMicro = status === 'error' ? 0 : typeof usage?.cost === 'number' && usage.cost >= 0 ? Math.round(usage.cost * 1_000_000) : computed;
-  const charged = status === 'error' ? 0 : chargeMicro(providerMicro, billing.markup);
+  const providerMicro = status === 'error' ? 0 : typeof usage?.cost === 'number' && usage.cost >= 0 ? (usage.cost > 0 ? Math.max(1, Math.round(usage.cost * 1_000_000)) : 0) : computed;
+  const wanted = status === 'error' ? 0 : chargeMicro(providerMicro, billing.markup);
+  const charged = holdMicro === null ? wanted : Math.min(wanted, holdMicro);
   const db = getDb();
   try {
     await db.batch([
@@ -140,6 +157,7 @@ async function recordUsage(ctx: ChatContext, model: string, billing: Billing, us
       ...(charged > 0
         ? [ledgerInsert({ userId: ctx.userId, deltaMicroUsd: -charged, type: 'usage', idempotencyKey: `usage:${ctx.requestId}`, refType: 'request', refId: ctx.requestId, note: model })]
         : []),
+      closeHold(ctx.requestId, status === 'error' ? 'released' : 'settled'),
     ]);
   } catch (e) {
     console.error('usage metering failed', ctx.requestId, e instanceof Error ? e.message : e);
@@ -166,9 +184,11 @@ export async function runChat(ctx: ChatContext, body: ChatRequest, signal?: Abor
   const inTokensEstimate = Math.ceil(JSON.stringify(body.messages).length / 3);
   const maxOut = body.max_tokens ?? 2048;
   const maxCost = chargeMicro(Math.round(inTokensEstimate * billing.inPrice + maxOut * billing.outPrice), billing.markup);
-  const balance = await getBalanceMicroUsd(ctx.userId);
-  if (maxCost > 0 && balance < maxCost) {
-    throw new GatewayError(402, 'insufficient_credits', `Insufficient credits. This request can cost up to $${(maxCost / 1e6).toFixed(4)}; your balance is $${(Math.max(balance, 0) / 1e6).toFixed(4)}.`);
+  // SEC-1: reserve the worst-case cost first. The check and the insert are one statement, so parallel calls cannot overspend.
+  const holdMicro = maxCost > 0 ? maxCost : null;
+  if (holdMicro !== null && !(await reserveCredit(ctx.userId, ctx.requestId, holdMicro))) {
+    const available = await getAvailableMicroUsd(ctx.userId);
+    throw new GatewayError(402, 'insufficient_credits', insufficientCreditsMessage(maxCost, available), {}, { need_micro_usd: maxCost, available_micro_usd: Math.max(available, 0) });
   }
 
   const upstreamBody: Record<string, unknown> = { ...body, max_tokens: maxOut, usage: { include: true } };
@@ -183,7 +203,7 @@ export async function runChat(ctx: ChatContext, body: ChatRequest, signal?: Abor
       signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(300_000)]) : AbortSignal.timeout(300_000),
     });
   } catch (e) {
-    await recordUsage(ctx, body.model, billing, null, inTokensEstimate, 0, 'error');
+    await recordUsage(ctx, body.model, billing, null, inTokensEstimate, 0, 'error', holdMicro);
     throw new GatewayError(e instanceof Error && e.name === 'TimeoutError' ? 504 : 502, 'upstream_unreachable', 'The model provider could not be reached');
   }
 
@@ -191,7 +211,7 @@ export async function runChat(ctx: ChatContext, body: ChatRequest, signal?: Abor
 
   if (!upstream.ok) {
     const payload = (await upstream.json().catch(() => ({}))) as { error?: { message?: string } };
-    await recordUsage(ctx, body.model, billing, null, inTokensEstimate, 0, 'error');
+    await recordUsage(ctx, body.model, billing, null, inTokensEstimate, 0, 'error', holdMicro);
     const status = upstream.status >= 500 ? 502 : upstream.status === 401 || upstream.status === 402 ? 502 : upstream.status;
     const message = upstream.status === 401 || upstream.status === 402 ? 'The upstream provider rejected the request. Please contact support.' : payload?.error?.message || `Provider returned ${upstream.status}`;
     throw new GatewayError(status, status === 429 ? 'provider_rate_limited' : 'upstream_error', message, baseHeaders);
@@ -200,18 +220,21 @@ export async function runChat(ctx: ChatContext, body: ChatRequest, signal?: Abor
   if (!body.stream) {
     const payload = (await upstream.json().catch(() => null)) as Record<string, unknown> | null;
     if (!payload) {
-      await recordUsage(ctx, body.model, billing, null, inTokensEstimate, 0, 'error');
+      await recordUsage(ctx, body.model, billing, null, inTokensEstimate, 0, 'error', holdMicro);
       throw new GatewayError(502, 'upstream_error', 'Invalid response from the model provider');
     }
     const usage = (payload.usage as Usage | undefined) ?? null;
     const text = JSON.stringify(payload.choices ?? '').length;
-    const { charged } = await recordUsage(ctx, body.model, billing, usage, inTokensEstimate, text, 'ok');
+    const { charged } = await recordUsage(ctx, body.model, billing, usage, inTokensEstimate, text, 'ok', holdMicro);
     sanitizeUsage(payload);
     payload.wasl = { request_id: ctx.requestId, charged_usd: +(charged / 1e6).toFixed(6) };
     return Response.json(payload, { headers: baseHeaders });
   }
 
-  if (!upstream.body) throw new GatewayError(502, 'upstream_error', 'Empty stream from the model provider');
+  if (!upstream.body) {
+    await recordUsage(ctx, body.model, billing, null, inTokensEstimate, 0, 'error', holdMicro);
+    throw new GatewayError(502, 'upstream_error', 'Empty stream from the model provider');
+  }
   const reader = upstream.body.getReader();
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
@@ -222,7 +245,7 @@ export async function runChat(ctx: ChatContext, body: ChatRequest, signal?: Abor
   const finish = async (status: 'ok' | 'aborted') => {
     if (recorded) return;
     recorded = true;
-    await recordUsage(ctx, body.model, billing, usage, inTokensEstimate, outChars, status);
+    await recordUsage(ctx, body.model, billing, usage, inTokensEstimate, outChars, status, holdMicro);
   };
   const processLine = (line: string): string => {
     if (!line.startsWith('data:')) return line;
