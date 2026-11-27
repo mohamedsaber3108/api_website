@@ -1,0 +1,11 @@
+# EXAMPLE ONLY (AUD-1). Not installed, not run by any script in this repo.
+# Pairs with verify-audit.service.example. Enable it yourself: systemctl enable --now verify-audit.timer
+[Unit]
+Description=Daily audit chain check
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

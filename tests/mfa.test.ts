@@ -3,7 +3,6 @@ import { env } from 'cloudflare:workers';
 import { eq } from 'drizzle-orm';
 import { getDb } from '../db';
 import { accounts, auditLogs, mfaCredentials, mfaRecoveryCodes, sessions } from '../db/schema';
-import * as audit from '../app/api/admin/audit/route';
 import * as incidents from '../app/api/admin/incidents/route';
 import * as models from '../app/api/admin/models/route';
 import * as overview from '../app/api/admin/overview/route';
@@ -47,9 +46,9 @@ async function enrolledAdmin() {
   return { ...a, secret, recoveryCodes: recoveryCodes as string[] };
 }
 
-// [method, path, handler]: all 15 admin handlers, as in tests/admin.test.ts.
+// [method, path, handler]: the 14 admin handlers that allow admins (the audit route is super_admin only, see tests/audit.test.ts).
 const ADMIN_ROUTES: Array<[string, string, unknown]> = [
-  ['GET', '/api/admin/audit', audit.GET], ['GET', '/api/admin/incidents', incidents.GET], ['POST', '/api/admin/incidents', incidents.POST], ['PATCH', '/api/admin/incidents', incidents.PATCH],
+  ['GET', '/api/admin/incidents', incidents.GET], ['POST', '/api/admin/incidents', incidents.POST], ['PATCH', '/api/admin/incidents', incidents.PATCH],
   ['GET', '/api/admin/models', models.GET], ['PUT', '/api/admin/models', models.PUT], ['GET', '/api/admin/overview', overview.GET], ['GET', '/api/admin/tickets', tickets.GET],
   ['GET', '/api/admin/tickets/t1', ticketById.GET], ['PATCH', '/api/admin/tickets/t1', ticketById.PATCH], ['POST', '/api/admin/tickets/t1', ticketById.POST], ['GET', '/api/admin/usage', usage.GET],
   ['GET', '/api/admin/users', users.GET], ['PATCH', '/api/admin/users/u1', userById.PATCH], ['POST', '/api/admin/users/u1/credits', credits.POST],
@@ -98,7 +97,7 @@ describe('A1: secret bound to the user id', () => {
 });
 
 describe('admin without MFA', () => {
-  it('gets 403 mfa_required (enrolled:false) on each of the 15 admin handlers that allow admins', async () => {
+  it('gets 403 mfa_required (enrolled:false) on each of the 14 admin handlers that allow admins', async () => {
     const a = await makeUser({ role: 'admin', mfaVerifiedAt: null });
     for (const [method, path, fn] of ADMIN_ROUTES) {
       const res = await callAdmin(method, path, fn, a.cookie);

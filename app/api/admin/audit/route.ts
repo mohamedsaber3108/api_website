@@ -10,12 +10,13 @@ export const dynamic = 'force-dynamic';
 const text = z.string().trim().min(1).max(120);
 
 /**
- * Audit viewer. Filters (all optional, combined with AND):
+ * Audit viewer. super_admin only (AUD-1, D-22): admin, support and customers get 403, and the refusal is written as a denied row.
+ * Filters (all optional, combined with AND):
  * actor = user id or e-mail; action = part of the action name; target = target id or type; result = success | denied | failed;
  * from / to = time in ms since 1970 (the screen turns the viewer's local dates into these); before = paging cursor (created_at).
  */
 export const GET = handle(async request => {
-  await requireRole(request, 'admin');
+  await requireRole(request, 'super_admin');
   const q = parseQuery(request, z.object({
     limit: z.coerce.number().int().min(1).max(200).default(50),
     before: z.coerce.number().int().optional(),

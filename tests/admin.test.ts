@@ -20,8 +20,8 @@ afterAll(async () => { await h.dispose(); });
 
 type Handler = (r: Request, c: { params: Promise<{ id: string }> }) => Promise<Response>;
 // [method, path, handler, roles allowed]. 17 handlers in 12 route files under app/api/admin.
-const ROUTES: Array<[string, string, Handler, 'admin' | 'staff']> = [
-  ['GET', '/api/admin/audit', audit.GET as Handler, 'admin'],
+const ROUTES: Array<[string, string, Handler, 'super' | 'admin' | 'staff']> = [
+  ['GET', '/api/admin/audit', audit.GET as Handler, 'super'],
   ['GET', '/api/admin/incidents', incidents.GET as Handler, 'staff'],
   ['POST', '/api/admin/incidents', incidents.POST as Handler, 'admin'],
   ['PATCH', '/api/admin/incidents', incidents.PATCH as Handler, 'admin'],
@@ -62,10 +62,18 @@ describe('admin routes: 17 handlers', () => {
       const a = await makeUser({ role: 'admin', expiresAt: Date.now() - 1000 });
       expect((await call(method, path, fn, a.cookie)).status).toBe(401);
     });
-    if (who === 'admin') {
+    if (who !== 'staff') {
       it('support staff (not admin) -> 403 forbidden', async () => {
         const s = await makeUser({ role: 'support' });
         expect((await call(method, path, fn, s.cookie)).status).toBe(403);
+      });
+    }
+    if (who === 'super') {
+      it('an admin (not super_admin) -> 403 forbidden', async () => {
+        const a = await makeUser({ role: 'admin' });
+        const res = await call(method, path, fn, a.cookie);
+        expect(res.status).toBe(403);
+        expect((await res.json()).code).toBe('forbidden');
       });
     }
     if (method !== 'GET') {
@@ -81,6 +89,10 @@ describe('admin routes: 17 handlers', () => {
     const a = await makeUser({ role: 'admin' });
     expect((await call('GET', '/api/admin/overview', overview.GET as Handler, a.cookie)).status).toBe(200);
     expect((await call('GET', '/api/admin/users', users.GET as Handler, a.cookie)).status).toBe(200);
+  });
+  it('positive control: a super_admin passes the gate on the audit route', async () => {
+    const s = await makeUser({ role: 'super_admin' });
+    expect((await call('GET', '/api/admin/audit', audit.GET as Handler, s.cookie)).status).toBe(200);
   });
   it('positive control: support passes the gate on staff routes', async () => {
     const s = await makeUser({ role: 'support' });
