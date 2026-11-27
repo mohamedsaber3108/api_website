@@ -3,7 +3,7 @@ import { and, eq, gt, isNull, or } from 'drizzle-orm';
 import { z } from 'zod';
 import { getDb } from '../../db';
 import { accounts, apiKeys, modelConfigs, usageEvents } from '../../db/schema';
-import { defaultMarkupPercent, features } from './config';
+import { defaultMarkupPercent, features, providerBaseUrl } from './config';
 import { flagEnabled } from './flags';
 import { sha256Hex } from './crypto';
 import { findModel } from './catalog';
@@ -215,7 +215,7 @@ export async function runChat(ctx: ChatContext, body: ChatRequest, signal?: Abor
 
   let upstream: Response;
   try {
-    upstream = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    upstream = await fetch(`${providerBaseUrl()}/chat/completions`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${env.OPENROUTER_API_KEY}`, 'Content-Type': 'application/json', 'X-Title': 'Wasl AI' },
       body: JSON.stringify(upstreamBody),
