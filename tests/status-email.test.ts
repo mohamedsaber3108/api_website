@@ -2,6 +2,8 @@ import { env } from 'cloudflare:workers';
 import { eq } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as forgot from '../app/api/auth/forgot-password/route';
+import * as register from '../app/api/auth/register/route';
+import * as resend from '../app/api/auth/resend-verification/route';
 import * as status from '../app/api/v1/status/route';
 import { getDb } from '../db';
 import { accounts, incidents } from '../db/schema';
@@ -104,7 +106,10 @@ describe('mail templates', () => {
     expect(en.html).toContain('<html lang="en" dir="ltr">');
     expect(en.text).toContain('Hi Sam,');
     expect(en.text).toContain(link);
-    expect(link.startsWith('https://')).toBe(true);
+    // Footnote at least 14px, raw URL line is ltr, name sits in <bdi>.
+    expect(ar.html).toContain(`<p dir="ltr" style="font-size:14px;`);
+    expect(en.html).toContain('<bdi>Sam</bdi>');
+    expect(en.html).not.toMatch(/font-size:1[0-3]px/);
   });
 
   it('escapes every inserted value', () => {
@@ -150,5 +155,59 @@ describe('forgot-password mail', () => {
     const ar = await sent('ar');
     expect(ar.html).toContain('<html lang="ar" dir="rtl">');
     expect(ar.text).toContain('https://wasl.example/reset-password?token=');
+    // Every rendered link starts with PUBLIC_BASE_URL.
+    for (const m of [en, ar]) {
+      const hrefs = [...m.html.matchAll(/href="([^"]+)"/g)].map(x => x[1]);
+      expect(hrefs.length).toBeGreaterThan(0);
+      for (const h of hrefs) expect(h.startsWith(`${env.PUBLIC_BASE_URL}/`)).toBe(true);
+    }
+  });
+
+  it('answers the same status and body for a known and an unknown email', async () => {
+    env.PUBLIC_BASE_URL = 'https://wasl.example';
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 200 })));
+    const u = await makeUser();
+    const ask = async (email: string) => {
+      const res = await forgot.POST(req('/api/auth/forgot-password', { method: 'POST', body: { email } }), { params: Promise.resolve({}) });
+      return { status: res.status, text: await res.text() };
+    };
+    const known = await ask(u.email);
+    const unknown = await ask(`nobody_${u.userId}@example.test`);
+    expect(known.status).toBe(202);
+    expect(unknown).toEqual(known);
+  });
+});
+
+describe('register and resend-verification mail', () => {
+  const stubMail = () => {
+    env.RESEND_API_KEY = 're_test_not_real';
+    env.EMAIL_FROM = 'noreply@example.test';
+    env.PUBLIC_BASE_URL = 'https://wasl.example';
+    const fetchStub = vi.fn(async () => new Response('{}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchStub);
+    return () => JSON.parse((fetchStub.mock.calls.at(-1) as unknown as [string, { body: string }])[1].body) as { html: string; text: string };
+  };
+
+  it('register sends a verify mail with lang and dir', async () => {
+    const lastMail = stubMail();
+    const res = await register.POST(
+      req('/api/auth/register', { method: 'POST', headers: { 'accept-language': 'en' }, body: { email: `reg_${Date.now()}@example.test`, password: 'Str0ng-Passw0rd!xyz', name: 'Sam <b>', acceptTerms: true } }),
+      { params: Promise.resolve({}) },
+    );
+    expect(res.status).toBe(201);
+    const m = lastMail();
+    expect(m.html).toContain('<html lang="en" dir="ltr">');
+    expect(m.html).toContain('href="https://wasl.example/verify-email?token=');
+    expect(m.html).toContain('<bdi>Sam &lt;b&gt;</bdi>');
+  });
+
+  it('resend-verification sends a verify mail with lang and dir (Arabic by default)', async () => {
+    const lastMail = stubMail();
+    const u = await makeUser({ verified: false });
+    const res = await resend.POST(req('/api/auth/resend-verification', { method: 'POST', cookie: u.cookie }), { params: Promise.resolve({}) });
+    expect(res.status).toBe(200);
+    const m = lastMail();
+    expect(m.html).toContain('<html lang="ar" dir="rtl">');
+    expect(m.html).toContain('href="https://wasl.example/verify-email?token=');
   });
 });
