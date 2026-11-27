@@ -24,9 +24,23 @@ Everything else (login, tickets, incidents, keys) keeps the old behaviour: a fai
 
 `auth.admin_denied` is written at most once per actor, route pattern and reason in 60 seconds (the id in `/api/admin/users/<id>` is stored as `:id`, so changing the id does not make a new row), so looping on an admin URL cannot flood the log. The skipped attempts are not counted.
 
+## Who can read it, and for how long (owner decision D-22)
+- **Reads: `super_admin` only.** `GET /api/admin/audit` answers 403 to `admin`, `support` and customers. The refusal is written as a denied row (`auth.admin_denied`, at most one per actor, route and reason in 60 seconds). The Audit tab is shown only to a `super_admin`; an `admin` who reaches it sees "The audit log is for super admins only." An `ADMIN_EMAILS` break-glass entry is `admin`, never `super_admin`, so it cannot read the log.
+- **Retention: 12 months online, then export and archive.** Nothing deletes rows today; the archive step is the export script below, run by the person the owner names.
+- **Tamper-evident only until the off-box copy runs.** The off-box destination is not chosen and the export stays OFF. Say "tamper-evident", not "protected", until it runs.
+
 ## Verify
 Run on a COPY of the database file, never the live one:
 `node scripts/verify-audit.mjs <copy.sqlite>` prints the first broken row (exit 1) or OK (exit 0).
+
+### Daily verifier with an alert (AUD-1)
+`node scripts/verify-audit-daily.mjs <copy.sqlite>` runs the verifier on the copy you give it. It has no default path, opens the file read-only and never writes to the database.
+Exit codes: 0 intact, 1 chain broken, 2 check failed (no path, unreadable file), 3 the alert hook itself failed.
+On 1 or 2 it calls the alert hook. The hook is OFF unless you set one of these (no destination is built in):
+- `AUDIT_ALERT_COMMAND`: absolute path of an executable. Run with no shell and no arguments. It reads `AUDIT_ALERT_STATUS` (`broken` or `failed`) and `AUDIT_ALERT_MESSAGE` from its environment.
+- `AUDIT_ALERT_WEBHOOK_URL`: an `https://` URL. It gets one POST with JSON `{status, message, file, at}`.
+With no hook set, the failure is only printed and the exit code is non-zero.
+Example systemd files (not installed, not run): `deploy/verify-audit.service.example` and `deploy/verify-audit.timer.example` (daily 03:30). Something else must put a fresh copy of the database at the path first; that copy job and the alert receiver are the owner's choice (D-22).
 
 ## Off-box export hook (OFF by default)
 `node scripts/export-audit.mjs <copy.sqlite> --out <file.jsonl> [--after <seq>]` writes chained rows after `seq` and a last `{"tail":{seq,hash}}` line. Without `--out` it does nothing. No destination is built in and nothing is scheduled: where the file goes and how often (daily) is the owner's decision.
