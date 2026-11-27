@@ -49,12 +49,17 @@ async function countApprovers(kind: RequestKind, requesterId: string, targetId: 
 /** With no second approver every adjustment is blocked, and the caller is told so (English and Arabic). */
 function noApprover(kind: RequestKind): HttpError {
   const role = kind === 'role_change';
+  const flag = kind === 'flag_change';
   const en = role
     ? 'No second super admin is available, so this role change cannot be approved. Add another super admin first.'
-    : 'No second admin is available, so this credit adjustment cannot be approved. Add another admin first.';
+    : flag
+      ? 'No second admin is available, so this switch cannot be turned on. Add another admin first.'
+      : 'No second admin is available, so this credit adjustment cannot be approved. Add another admin first.';
   const ar = role
     ? 'لا يوجد مدير أعلى ثانٍ للموافقة، لذلك لا يمكن اعتماد تغيير الدور. أضف مديرًا أعلى آخر أولًا.'
-    : 'لا يوجد مدير ثانٍ للموافقة، لذلك لا يمكن اعتماد تعديل الرصيد. أضف مديرًا آخر أولًا.';
+    : flag
+      ? 'لا يوجد مدير ثانٍ للموافقة، لذلك لا يمكن تشغيل هذا المفتاح. أضف مديرًا آخر أولًا.'
+      : 'لا يوجد مدير ثانٍ للموافقة، لذلك لا يمكن اعتماد تعديل الرصيد. أضف مديرًا آخر أولًا.';
   return new HttpError(409, en, 'no_second_approver', { message_en: en, message_ar: ar });
 }
 

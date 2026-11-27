@@ -81,7 +81,10 @@ describe('inference flag', () => {
     const a = await admin();
     const only = await setFlagVia(a.cookie, false).then(() => setFlagVia(a.cookie, true));
     expect(only.status).toBe(409);
-    expect((await only.json()).code).toBe('no_second_approver');
+    const onlyBody = await only.json();
+    expect(onlyBody.code).toBe('no_second_approver');
+    expect(onlyBody.message_en).toContain('switch');
+    expect(onlyBody.message_en).not.toContain('credit');
     await admin();
     const first = await (await setFlagVia(a.cookie, true)).json();
     const again = await (await setFlagVia(a.cookie, true)).json();
