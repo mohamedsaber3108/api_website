@@ -59,10 +59,11 @@ describe('Stripe signature', () => {
     expect(await verifyStripeSignature(body, 'garbage', SECRET)).toBe(false);
     expect(await verifyStripeSignature(body, `t=${Math.floor(Date.now() / 1000)}`, SECRET)).toBe(false);
   });
+  // 360 s, not 301 s: the check reads the clock again, so a 1 s gap turned +301 into exactly 300 (allowed) and made CI flaky.
   it('rejects a stale timestamp (older than 5 minutes) and one too far in the future', async () => {
     const now = Math.floor(Date.now() / 1000);
-    expect(await verifyStripeSignature(body, await sign(body, now - 301), SECRET)).toBe(false);
-    expect(await verifyStripeSignature(body, await sign(body, now + 301), SECRET)).toBe(false);
+    expect(await verifyStripeSignature(body, await sign(body, now - 360), SECRET)).toBe(false);
+    expect(await verifyStripeSignature(body, await sign(body, now + 360), SECRET)).toBe(false);
     expect(await verifyStripeSignature(body, await sign(body, now - 200), SECRET)).toBe(true);
   });
   it('accepts when any one of several v1 values matches', async () => {
