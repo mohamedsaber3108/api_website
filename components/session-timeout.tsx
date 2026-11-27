@@ -40,9 +40,9 @@ export default function SessionTimeout({ tr }: { tr: Tr }) {
   }, []);
 
   useEffect(() => {
-    peek();
+    const first = setTimeout(peek, 0);
     const id = setInterval(peek, POLL_MS);
-    return () => clearInterval(id);
+    return () => { clearTimeout(first); clearInterval(id); };
   }, [peek]);
 
   useEffect(() => {
