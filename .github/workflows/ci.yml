@@ -44,3 +44,7 @@ jobs:
 
       - name: Build
         run: pnpm build
+
+      # OPS-3/OPS-5 deploy scripts: bash -n on every deploy script plus dry-run tests with temp folders (no network, no root).
+      - name: Deploy script tests
+        run: bash tests/deploy-scripts.test.sh
