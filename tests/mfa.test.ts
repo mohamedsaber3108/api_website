@@ -308,14 +308,14 @@ describe('recovery code regeneration', () => {
 
 describe('credit adjustment needs MFA verified in the last 15 minutes', () => {
   const adjust = (cookie: string, targetId: string) => credits.POST(req(`/api/admin/users/${targetId}/credits`, { method: 'POST', cookie, body: { amountUsd: 2, note: 'mfa test credit', requestKey: crypto.randomUUID() } }), { params: Promise.resolve({ id: targetId }) });
-  it('403 mfa_recent_required when the verification is older than 15 minutes, 201 when recent', async () => {
+  it('403 mfa_recent_required when the verification is older than 15 minutes, 202 (pending request) when recent', async () => {
     const target = await makeUser();
     const stale = await makeUser({ role: 'admin', mfaVerifiedAt: Date.now() - 16 * 60_000 });
     const res = await adjust(stale.cookie, target.userId);
     expect(res.status).toBe(403);
     expect((await res.json()).code).toBe('mfa_recent_required');
     const fresh = await makeUser({ role: 'admin', mfaVerifiedAt: Date.now() - 14 * 60_000 });
-    expect((await adjust(fresh.cookie, target.userId)).status).toBe(201);
+    expect((await adjust(fresh.cookie, target.userId)).status).toBe(202);
   });
   it('an enrolled admin can step up again to adjust credit', async () => {
     const a = await enrolledAdmin();
@@ -323,13 +323,13 @@ describe('credit adjustment needs MFA verified in the last 15 minutes', () => {
     await getDb().update(sessions).set({ mfaVerifiedAt: Date.now() - 3600_000 }).where(eq(sessions.userId, a.userId));
     expect((await adjust(a.cookie, target.userId)).status).toBe(403);
     expect((await doVerify(a.cookie, await codeAt(a.secret, 1))).status).toBe(200);
-    expect((await adjust(a.cookie, target.userId)).status).toBe(201);
+    expect((await adjust(a.cookie, target.userId)).status).toBe(202);
   });
 });
 
 describe('A5: a role change ends MFA verification', () => {
   it('clears mfa_verified_at on the target user\'s sessions', async () => {
-    const admin = await makeUser({ role: 'admin' });
+    const admin = await makeUser({ role: 'super_admin' }); // only a super_admin changes admins (SEC-2)
     const target = await makeUser({ role: 'admin' });
     const other = await makeUser({ role: 'admin' });
     const patch = (id: string, role: string) => userById.PATCH(req(`/api/admin/users/${id}`, { method: 'PATCH', cookie: admin.cookie, body: { role } }), { params: Promise.resolve({ id }) });
@@ -338,7 +338,7 @@ describe('A5: a role change ends MFA verification', () => {
     expect(t.mfaVerifiedAt).toBeNull();
     const [o] = await getDb().select().from(sessions).where(eq(sessions.userId, other.userId));
     expect(o.mfaVerifiedAt).not.toBeNull();
-    expect((await patch(target.userId, 'admin')).status).toBe(200);
+    await getDb().update(accounts).set({ role: 'admin' }).where(eq(accounts.userId, target.userId)); // as the server script would
     expect((await callAdmin('GET', '/api/admin/users', users.GET, target.cookie)).status).toBe(403); // must verify again
   });
 });

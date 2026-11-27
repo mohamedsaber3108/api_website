@@ -184,7 +184,7 @@ export default function WaslApp() {
       : <section className="section"><div className="account-signin"><KeyRound size={23} /><p>{isAr ? "سجّل الدخول أو أنشئ حسابًا لإدارة مفاتيحك ورصيدك." : "Sign in or create an account to manage keys and credits."}</p><button className="button-primary" onClick={() => go("login")}>{t.nav.login}</button><button className="pill-link" onClick={() => go("register")}>{t.nav.register}</button></div></section>}</main>}
 
     {page === "admin" && (!session ? <main className="inner-page"><section className="section"><p>…</p></section></main>
-      : session.user && (session.user.role === "admin" || session.user.role === "support") ? <AdminConsole lang={lang} session={session} />
+      : session.user && (session.user.role === "admin" || session.user.role === "super_admin" || session.user.role === "support") ? <AdminConsole lang={lang} session={session} />
       : <main className="inner-page"><section className="page-heading section"><h1>{isAr ? "غير مصرّح" : "Not authorised"}</h1><p>{isAr ? "هذه الصفحة لفريق وصل فقط." : "This page is for Wasl staff only."}</p></section></main>)}
 
     {(LEGAL_PAGES as Page[]).includes(page) && <Legal page={page as LegalPage} lang={lang} go={p => go(p)} />}

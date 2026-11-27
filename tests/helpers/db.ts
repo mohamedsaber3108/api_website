@@ -44,7 +44,7 @@ export async function makeUser(opts: { role?: string; verified?: boolean; status
   const db = getDb();
   await db.insert(accounts).values({ userId, email, createdAt: now, authProvider: 'password', role: opts.role ?? 'customer', status: opts.status ?? 'active', emailVerifiedAt: opts.verified === false ? null : now });
   const token = randomHex(32);
-  await db.insert(sessions).values({ id: await sha256Hex(token), userId, createdAt: now, lastSeenAt: now, expiresAt: opts.expiresAt ?? now + 3600_000, mfaVerifiedAt: opts.mfaVerifiedAt !== undefined ? opts.mfaVerifiedAt : opts.role === 'admin' ? now : null });
+  await db.insert(sessions).values({ id: await sha256Hex(token), userId, createdAt: now, lastSeenAt: now, expiresAt: opts.expiresAt ?? now + 3600_000, mfaVerifiedAt: opts.mfaVerifiedAt !== undefined ? opts.mfaVerifiedAt : opts.role === 'admin' || opts.role === 'super_admin' ? now : null });
   return { userId, email, cookie: `wasl_session=${token}` };
 }
 

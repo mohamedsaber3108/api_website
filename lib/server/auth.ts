@@ -1,12 +1,15 @@
 import { and, eq, gt, isNull } from 'drizzle-orm';
 import { getDb } from '../../db';
 import { accounts, authTokens, sessions } from '../../db/schema';
-import { adminEmails, features, SESSION_COOKIE, SESSION_TTL_MS } from './config';
+import { audit, auditDeniedOnce } from './audit';
+import { adminEmails, adminEmailsBreakGlass, features, SESSION_COOKIE, SESSION_TTL_MS } from './config';
 import { randomHex, sha256Hex } from './crypto';
 import { clientIp, cookieHeader, HttpError, readCookie } from './http';
 import { assertAdminMfa } from './mfa';
 
-export type Role = 'customer' | 'support' | 'admin';
+export type Role = 'customer' | 'support' | 'admin' | 'super_admin';
+
+export const isAdminRole = (r: Role) => r === 'admin' || r === 'super_admin';
 
 export type Principal = {
   userId: string;
@@ -18,6 +21,8 @@ export type Principal = {
   sessionId: string | null;
   /** When this session last passed MFA; null if never (or for hosted ChatGPT identity, which has no session). */
   mfaVerifiedAt: number | null;
+  /** True when `admin` came only from ADMIN_EMAILS while a super_admin exists (break-glass). Every admin request then writes an audit row. */
+  breakGlass: boolean;
 };
 
 const USER_ID_HEADER = 'oai-authenticated-user-id';
@@ -25,9 +30,22 @@ const USER_EMAIL_HEADER = 'oai-authenticated-user-email';
 const USER_FULL_NAME_HEADER = 'oai-authenticated-user-full-name';
 const USER_FULL_NAME_ENCODING_HEADER = 'oai-authenticated-user-full-name-encoding';
 
-function effectiveRole(role: string, email: string, verified: boolean): Role {
-  if (verified && adminEmails().has(email.toLowerCase())) return 'admin';
-  return role === 'admin' || role === 'support' ? (role as Role) : 'customer';
+async function superAdminExists(): Promise<boolean> {
+  const [r] = await getDb().select({ id: accounts.userId }).from(accounts).where(and(eq(accounts.role, 'super_admin'), eq(accounts.status, 'active'))).limit(1);
+  return !!r;
+}
+
+/**
+ * The role used for every request. The stored role wins for super_admin. An ADMIN_EMAILS entry (verified email) grants `admin`
+ * only while no active super_admin exists. After that it grants `admin` only when ADMIN_EMAILS_BREAKGLASS=true (break-glass:
+ * MFA still applies and every admin request is audited). It never grants super_admin.
+ */
+export async function effectiveRole(role: string, email: string, verified: boolean): Promise<{ role: Role; breakGlass: boolean }> {
+  const stored: Role = role === 'super_admin' || role === 'admin' || role === 'support' ? role : 'customer';
+  if (stored === 'super_admin' || !verified || !adminEmails().has(email.toLowerCase())) return { role: stored, breakGlass: false };
+  if (!(await superAdminExists())) return { role: 'admin', breakGlass: false };
+  if (adminEmailsBreakGlass() && !isAdminRole(stored)) return { role: 'admin', breakGlass: true };
+  return { role: stored, breakGlass: false };
 }
 
 function safeDecode(value: string): string | null {
@@ -56,11 +74,13 @@ export async function getPrincipal(request: Request): Promise<Principal | null> 
         await db.update(sessions).set({ lastSeenAt: now }).where(eq(sessions.id, id));
       }
       const verified = !!row.a.emailVerifiedAt;
+      const eff = await effectiveRole(row.a.role, row.a.email, verified);
       return {
         userId: row.a.userId,
         email: row.a.email,
         name: row.a.name || row.a.email,
-        role: effectiveRole(row.a.role, row.a.email, verified),
+        role: eff.role,
+        breakGlass: eff.breakGlass,
         provider: 'password',
         emailVerified: verified,
         sessionId: id,
@@ -83,11 +103,13 @@ export async function getPrincipal(request: Request): Promise<Principal | null> 
       .onConflictDoNothing();
     const [a] = await db.select().from(accounts).where(eq(accounts.userId, chatgptId)).limit(1);
     if (a && a.status === 'active') {
+      const eff = await effectiveRole(a.role, a.email, true);
       return {
         userId: a.userId,
         email: a.email,
         name: a.name || fullName || a.email,
-        role: effectiveRole(a.role, a.email, true),
+        role: eff.role,
+        breakGlass: eff.breakGlass,
         provider: 'chatgpt',
         emailVerified: true,
         sessionId: null,
@@ -106,16 +128,32 @@ export async function requireUser(request: Request): Promise<Principal> {
 
 export async function requireRole(request: Request, ...roles: Role[]): Promise<Principal> {
   const p = await requireUser(request);
-  if (!roles.includes(p.role)) throw new HttpError(403, 'Forbidden', 'forbidden');
+  // super_admin passes wherever `admin` is allowed.
+  // Audit target = route pattern, not the raw path: a new id in the URL must not make a new throttle key (review N1).
+  const path = new URL(request.url).pathname.replace(/^(\/api\/admin\/(?:users|requests|tickets))\/[^/]+/, '$1/:id').slice(0, 120);
+  if (!roles.includes(p.role) && !(p.role === 'super_admin' && roles.includes('admin'))) {
+    // A signed-in person tried an admin or staff route they may not use. (Not signed in = 401, not written: no actor to record.)
+    // One row per actor, route and reason per 60 seconds, so a customer hammering an admin URL cannot flood the log.
+    await auditDeniedOnce(request, p.userId, 'auth.admin_denied', { type: 'route', id: path }, 'role_not_allowed', { actorRole: p.role });
+    throw new HttpError(403, 'Forbidden', 'forbidden');
+  }
   // Admins also need an MFA-verified session. Support staff are not required yet (SEC-3b).
-  if (p.role === 'admin') await assertAdminMfa(p);
+  if (isAdminRole(p.role)) {
+    try {
+      await assertAdminMfa(p);
+    } catch (e) {
+      if (e instanceof HttpError && e.code === 'mfa_required') await auditDeniedOnce(request, p.userId, 'auth.admin_denied', { type: 'route', id: path }, 'mfa_required', { actorRole: p.role });
+      throw e;
+    }
+  }
+  if (p.breakGlass) await audit(request, p.userId, 'auth.break_glass_used', { type: 'account', id: p.userId }, { method: request.method, path: new URL(request.url).pathname });
   return p;
 }
 
 /** Like requireUser, but for the MFA routes: an admin with a real session cookie (hosted ChatGPT identity has none). */
 export async function requireAdminSession(request: Request): Promise<Principal & { sessionId: string }> {
   const p = await requireUser(request);
-  if (p.role !== 'admin' || !p.sessionId) throw new HttpError(403, 'Forbidden', 'forbidden');
+  if (!isAdminRole(p.role) || !p.sessionId) throw new HttpError(403, 'Forbidden', 'forbidden');
   return p as Principal & { sessionId: string };
 }
 

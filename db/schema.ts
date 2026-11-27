@@ -14,7 +14,7 @@ export const accounts = sqliteTable('accounts', {
   /** 'password' for Wasl-native accounts, 'chatgpt' for hosted ChatGPT identity. */
   authProvider: text('auth_provider').notNull().default('chatgpt'),
   passwordHash: text('password_hash'),
-  /** customer | support | admin. Admin is only effective once the email is verified. */
+  /** customer | support | admin | super_admin. Admin roles are only effective once the email is verified. */
   role: text('role').notNull().default('customer'),
   /** active | suspended | deleted */
   status: text('status').notNull().default('active'),
@@ -224,7 +224,40 @@ export const auditLogs = sqliteTable('audit_logs', {
   meta: text('meta'),
   ip: text('ip'),
   createdAt: integer('created_at').notNull(),
-}, t => [index('audit_time_idx').on(t.createdAt), index('audit_actor_idx').on(t.actorId)]);
+  // SEC-4 (migration 0006). All nullable: rows written before it have none of these and are not part of the chain.
+  seq: integer('seq'),
+  prevHash: text('prev_hash'),
+  hash: text('hash'),
+  actorRole: text('actor_role'),
+  before: text('before'),
+  after: text('after'),
+  reason: text('reason'),
+  result: text('result'),
+}, t => [index('audit_time_idx').on(t.createdAt), index('audit_actor_idx').on(t.actorId), uniqueIndex('audit_seq_uq').on(t.seq), index('audit_action_idx').on(t.action), index('audit_target_idx').on(t.targetId)]);
+
+/**
+ * A sensitive admin action waiting for a second person (SEC-2). kind: credit_adjustment | role_change.
+ * status: pending | approved | rejected | expired. Pending requests expire after 24 hours (`expiresAt`).
+ * `payload` is JSON: { amountUsd, note } or { role }. `requestKey` makes a retried request idempotent per requester.
+ */
+export const adminRequests = sqliteTable('admin_requests', {
+  id: text('id').primaryKey(),
+  kind: text('kind').notNull(),
+  targetUserId: text('target_user_id').notNull().references(() => accounts.userId),
+  payload: text('payload').notNull(),
+  reason: text('reason').notNull(),
+  requestedBy: text('requested_by').notNull().references(() => accounts.userId),
+  requestKey: text('request_key'),
+  status: text('status').notNull().default('pending'),
+  createdAt: integer('created_at').notNull(),
+  expiresAt: integer('expires_at').notNull(),
+  decidedBy: text('decided_by'),
+  decidedAt: integer('decided_at'),
+  decisionReason: text('decision_reason'),
+}, t => [
+  index('admin_requests_status_idx').on(t.status, t.createdAt),
+  uniqueIndex('admin_requests_key_uq').on(t.requestedBy, t.requestKey),
+]);
 
 /** Admin overrides per catalog model: availability and markup. */
 export const modelConfigs = sqliteTable('model_configs', {
