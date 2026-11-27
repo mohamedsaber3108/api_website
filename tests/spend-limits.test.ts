@@ -126,6 +126,39 @@ describe('FEAT-2 spend limits in the gateway', () => {
   });
 });
 
+describe('FEAT-2 parallel calls near the limit', () => {
+  it('two parallel calls cannot charge more than the limit (both refused is allowed)', async () => {
+    const u = await funded();
+    const limit = 90; // micro-USD. One call needs a 75 hold, so two holds (150) do not fit.
+    await put(u.cookie, { scope: 'account', limitUsd: limit / 1e6 });
+    const results = await Promise.allSettled([call(u.userId), call(u.userId)]);
+    const ok = results.filter(r => r.status === 'fulfilled').length;
+    for (const r of results) if (r.status === 'rejected') expect(r.reason).toMatchObject({ status: 402, code: 'spend_limit_reached' });
+    const charged = (await getDb().select().from(usageEvents).where(eq(usageEvents.userId, u.userId))).reduce((s, e) => s + e.costMicroUsd, 0);
+    expect(charged).toBeLessThanOrEqual(limit);
+    expect(ok).toBeLessThanOrEqual(1);
+    expect(chatCalls()).toHaveLength(ok);
+    expect(charged).toBe(ok * CHARGE);
+  });
+});
+
+describe('FEAT-2 usage truncation', () => {
+  it('byDayModelTruncated is false at the cap and true above it, and only cap rows come back', async () => {
+    const u = await makeUser();
+    const now = Date.now();
+    const ev = (model: string) => getDb().insert(usageEvents).values({ id: crypto.randomUUID(), userId: u.userId, model, inputTokens: 1, outputTokens: 1, costMicroUsd: 1, createdAt: now, requestId: `trunc-${crypto.randomUUID()}` });
+    await ev('m/a');
+    await ev('m/b');
+    const atCap = await usageSummary(u.userId, 7, 2);
+    expect(atCap.byDayModel).toHaveLength(2);
+    expect(atCap.byDayModelTruncated).toBe(false);
+    await ev('m/c');
+    const over = await usageSummary(u.userId, 7, 2);
+    expect(over.byDayModel).toHaveLength(2);
+    expect(over.byDayModelTruncated).toBe(true);
+  });
+});
+
 describe('FEAT-2 limits route', () => {
   it('a change writes an audit row with before and after; removing the limit is audited too', async () => {
     const u = await funded();

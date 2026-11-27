@@ -4,6 +4,10 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import * as requestById from '../app/api/admin/requests/[id]/route';
 import * as settings from '../app/api/admin/settings/route';
 import * as checkout from '../app/api/billing/checkout/route';
+import * as accountRoute from '../app/api/account/route';
+import * as billingRoute from '../app/api/billing/route';
+import * as sessionRoute from '../app/api/auth/session/route';
+import * as healthRoute from '../app/api/v1/health/route';
 import { getDb } from '../db';
 import { accounts, adminRequests, auditLogs, featureFlags } from '../db/schema';
 import { GatewayError, newChatContext, parseChatRequest, runChat } from '../lib/server/gateway';
@@ -28,6 +32,22 @@ const admin = () => makeUser({ role: 'admin' });
 const setFlagVia = (cookie: string, enabled: boolean, reason = 'incident drill') => settings.POST(req('/api/admin/settings', { method: 'POST', cookie, body: { flag: 'inference', enabled, reason } }), idp('x'));
 const decide = (cookie: string, id: string, action: 'approve' | 'reject' = 'approve') => requestById.POST(req(`/api/admin/requests/${id}`, { method: 'POST', cookie, body: { action, reason: 'checked it' } }), idp(id));
 const audits = (action: string) => getDb().select().from(auditLogs).where(eq(auditLogs.action, action));
+
+describe('DB flag off is shown as inference off by every report', () => {
+  it('session, account, billing and GET /api/v1/health agree; on again after the flag is on', async () => {
+    const buyer = await makeUser();
+    const read = async () => ({
+      session: (await (await sessionRoute.GET(req('/api/auth/session', { cookie: buyer.cookie }), idp('x'))).json()).features.inference,
+      account: (await (await accountRoute.GET(req('/api/account', { cookie: buyer.cookie }), idp('x'))).json()).service.inference,
+      billing: (await (await billingRoute.GET(req('/api/billing', { cookie: buyer.cookie }), idp('x'))).json()).inferenceEnabled,
+      health: (await (await healthRoute.GET()).json()).inference,
+    });
+    expect(await read()).toEqual({ session: true, account: true, billing: true, health: 'available' });
+    const a = await admin();
+    expect((await setFlagVia(a.cookie, false)).status).toBe(200);
+    expect(await read()).toEqual({ session: false, account: false, billing: false, health: 'not_configured' });
+  });
+});
 
 describe('inference flag', () => {
   it('effective value needs the env switch, the provider key and a DB flag that is not off', async () => {

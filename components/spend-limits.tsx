@@ -1,5 +1,5 @@
 'use client';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useId, useState } from 'react';
 import { api, errorMessage, usd } from '../lib/client-api';
 
 type Row = { limitMicroUsd: number | null; spentMicroUsd: number };
@@ -17,17 +17,18 @@ function LimitRow({ ar, label, row, onSave }: { ar: boolean; label: string; row:
   const tr = (a: string, e: string) => (ar ? a : e);
   const [text, setText] = useState(row.limitMicroUsd === null ? '' : String(row.limitMicroUsd / 1e6));
   const [busy, setBusy] = useState(false);
+  const hintId = useId();
   const value = parseLimitUsd(text);
   const invalid = text.trim() !== '' && value === null;
   const save = async (value: number | null) => { setBusy(true); try { await onSave(value); } finally { setBusy(false); } };
   return <div>
     <span><b>{label}</b><small>{tr('أُنفق هذا الشهر', 'Spent this month')}: <bdi dir="ltr">{usd(row.spentMicroUsd, 4)}</bdi> · {row.limitMicroUsd === null ? tr('بلا حد', 'No limit') : <>{tr('الحد', 'Limit')}: <bdi dir="ltr">{usd(row.limitMicroUsd, 2)}</bdi></>}</small></span>
     <span className="row-actions">
-      <input dir="ltr" inputMode="decimal" aria-label={`${label}: ${tr('الحد الشهري بالدولار', 'monthly limit in USD')}`} placeholder={tr('بلا حد', 'No limit')} value={text} onChange={e => setText(e.target.value)} />
+      <input dir="ltr" inputMode="decimal" aria-label={`${label}: ${tr('الحد الشهري بالدولار', 'monthly limit in USD')}`} placeholder={tr('بلا حد', 'No limit')} aria-invalid={invalid} aria-describedby={invalid ? hintId : undefined} value={text} onChange={e => setText(e.target.value)} />
       <button className="button-dark" disabled={busy || value === null} onClick={() => value !== null && save(value)}>{tr('حفظ', 'Save')}</button>
       <button disabled={busy || row.limitMicroUsd === null} onClick={() => { setText(''); save(null); }}>{tr('إزالة', 'Remove')}</button>
     </span>
-    {invalid && <small className="live-error" role="status">{tr('أدخل رقماً أكبر من 0 وحتى 100000.', 'Enter a number above 0, up to 100000.')}</small>}
+    {invalid && <small id={hintId} className="live-error" role="status">{tr('أدخل رقماً أكبر من 0 وحتى 100000.', 'Enter a number above 0, up to 100000.')}</small>}
   </div>;
 }
 

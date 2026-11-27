@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import { CheckCircle2, LockKeyhole, Mail, UserPlus } from 'lucide-react';
 import { api, errorMessage, type SessionInfo } from '../lib/client-api';
+import { SESSION_REASONS, sessionReasonFrom } from '../lib/session-reason';
 
 export type AuthMode = 'login' | 'register' | 'forgot-password' | 'reset-password' | 'verify-email';
 type Props = { mode: AuthMode; lang: 'ar' | 'en'; session: SessionInfo | null; go: (page: AuthMode | 'dashboard' | 'terms' | 'privacy') => void; onChanged: () => Promise<void> | void };
@@ -12,6 +13,8 @@ export default function AuthPage({ mode, lang, session, go, onChanged }: Props) 
   const [form, setForm] = useState({ name: '', email: '', password: '', accept: false });
   // Auth pages only render after client-side routing, so reading the URL during render is safe.
   const token = typeof window === 'undefined' ? '' : new URLSearchParams(location.search).get('token') || '';
+  // Why the user landed on sign-in (for example the 8 h limit ended). Only a fixed list is accepted; raw input is never shown.
+  const reason = mode === 'login' && typeof window !== 'undefined' ? sessionReasonFrom(location.search) : null;
   const [busy, setBusy] = useState(mode === 'verify-email' && !!token);
   const [error, setError] = useState('');
   const [info, setInfo] = useState('');
@@ -78,6 +81,7 @@ export default function AuthPage({ mode, lang, session, go, onChanged }: Props) 
         {mode !== 'forgot-password' && <label>{mode === 'reset-password' ? tr('كلمة المرور الجديدة', 'New password') : tr('كلمة المرور', 'Password')}<input required type="password" minLength={mode === 'login' ? 1 : 10} maxLength={200} autoComplete={mode === 'login' ? 'current-password' : 'new-password'} value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} />{mode !== 'login' && <small>{tr('10 أحرف على الأقل.', 'At least 10 characters.')}</small>}</label>}
         {mode === 'register' && <label className="auth-check"><input type="checkbox" required checked={form.accept} onChange={e => setForm({ ...form, accept: e.target.checked })} /><span>{tr('أوافق على ', 'I agree to the ')}<button type="button" className="link" onClick={() => go('terms')}>{tr('شروط الخدمة', 'Terms of Service')}</button>{tr(' و', ' and ')}<button type="button" className="link" onClick={() => go('privacy')}>{tr('سياسة الخصوصية', 'Privacy Policy')}</button></span></label>}
         {error && <p className="live-error" role="alert">{error}</p>}
+        {reason && <p className="auth-info" role="status">{SESSION_REASONS[reason][lang]}</p>}
         {info && <p className="auth-info" role="status">{info}</p>}
         {devToken && mode === 'forgot-password' && <a className="pill-link" href={`/reset-password?token=${devToken}`}>{tr('وضع التطوير: افتح رابط إعادة التعيين', 'Dev mode: open the reset link')}</a>}
         <button className="button-primary" disabled={busy}>{busy ? '…' : mode === 'login' ? tr('تسجيل الدخول', 'Sign in') : mode === 'register' ? tr('إنشاء الحساب', 'Create account') : mode === 'forgot-password' ? tr('أرسل الرابط', 'Send reset link') : tr('حفظ كلمة المرور', 'Save password')}</button>

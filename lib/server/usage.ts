@@ -2,8 +2,11 @@ import { and, eq, gte, sql, type SQL } from 'drizzle-orm';
 import { getDb } from '../../db';
 import { usageEvents } from '../../db/schema';
 
-/** Daily buckets and per-model totals for a user (or the whole platform when userId is null). */
-export async function usageSummary(userId: string | null, days: number) {
+/** Most day-by-model rows returned. More rows set `byDayModelTruncated`. */
+export const BY_DAY_MODEL_LIMIT = 1000;
+
+/** Daily buckets and per-model totals for a user (or the whole platform when userId is null). `cap` is only for tests. */
+export async function usageSummary(userId: string | null, days: number, cap = BY_DAY_MODEL_LIMIT) {
   const since = Date.now() - days * 86_400_000;
   const where: SQL | undefined = userId ? and(eq(usageEvents.userId, userId), gte(usageEvents.createdAt, since)) : gte(usageEvents.createdAt, since);
   const db = getDb();
@@ -46,7 +49,8 @@ export async function usageSummary(userId: string | null, days: number) {
       .where(where),
   ]);
   // Day by model rows for the customer table. Skipped for the platform-wide (admin) view.
-  const byDayModel = userId
+  // One extra row is read so a cut-off is known, not silent.
+  const dayModelRows = userId
     ? await db
         .select({
           day,
@@ -58,9 +62,11 @@ export async function usageSummary(userId: string | null, days: number) {
         .where(where)
         .groupBy(day, usageEvents.model)
         .orderBy(day, usageEvents.model)
-        .limit(1000)
+        .limit(cap + 1)
     : [];
-  return { days, daily, byModel, byDayModel, totals };
+  const byDayModelTruncated = dayModelRows.length > cap;
+  const byDayModel = byDayModelTruncated ? dayModelRows.slice(0, cap) : dayModelRows;
+  return { days, daily, byModel, byDayModel, byDayModelTruncated, totals };
 }
 
 export function csvEscape(v: unknown): string {
