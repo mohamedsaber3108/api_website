@@ -8,6 +8,7 @@ declare namespace Cloudflare {
     PUBLIC_BASE_URL?: string;
     /** Comma separated emails that become admins once their email is verified. */
     ADMIN_EMAILS?: string;
+    ADMIN_EMAILS_BREAKGLASS?: string;
     /** "true" turns on the paid inference gateway. */
     INFERENCE_ENABLED?: string;
     /** Secret. Upstream provider key used by the paid gateway. */
@@ -26,6 +27,8 @@ declare namespace Cloudflare {
     CLIENT_IP_HEADER?: string;
     /** "true" only on the ChatGPT hosting platform, which sets and sanitises oai-authenticated-* headers. */
     TRUST_CHATGPT_HEADERS?: string;
+    /** Secret. Encrypts admin TOTP secrets (AES-GCM). Required in production; admin routes fail closed without it. */
+    MFA_ENCRYPTION_KEY?: string;
     /** Signup bonus in USD for new accounts. Default 0. */
     SIGNUP_BONUS_USD?: string;
   }

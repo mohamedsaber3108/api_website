@@ -3,8 +3,7 @@ import { z } from 'zod';
 import { getDb } from '../../../../db';
 import { accounts } from '../../../../db/schema';
 import { audit } from '../../../../lib/server/audit';
-import { createSession, publicUser, type Principal } from '../../../../lib/server/auth';
-import { adminEmails } from '../../../../lib/server/config';
+import { createSession, effectiveRole, publicUser, type Principal } from '../../../../lib/server/auth';
 import { verifyPassword } from '../../../../lib/server/crypto';
 import { clientIp, emailSchema, fail, handle, json, parseBody, requireSameOrigin } from '../../../../lib/server/http';
 import { rateLimit } from '../../../../lib/server/ratelimit';
@@ -33,7 +32,7 @@ export const POST = handle(async request => {
   await audit(request, account.userId, 'auth.login', { type: 'account', id: account.userId });
 
   const verified = !!account.emailVerifiedAt;
-  const role = verified && adminEmails().has(account.email) ? 'admin' : account.role;
-  const principal: Principal = { userId: account.userId, email: account.email, name: account.name || account.email, role: role as Principal['role'], provider: 'password', emailVerified: verified, sessionId: null };
+  const eff = await effectiveRole(account.role, account.email, verified);
+  const principal: Principal = { userId: account.userId, email: account.email, name: account.name || account.email, role: eff.role, provider: 'password', emailVerified: verified, sessionId: null, mfaVerifiedAt: null, breakGlass: eff.breakGlass };
   return json({ user: publicUser(principal) }, 200, { 'Set-Cookie': cookie });
 });

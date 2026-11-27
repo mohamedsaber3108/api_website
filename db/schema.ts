@@ -14,7 +14,7 @@ export const accounts = sqliteTable('accounts', {
   /** 'password' for Wasl-native accounts, 'chatgpt' for hosted ChatGPT identity. */
   authProvider: text('auth_provider').notNull().default('chatgpt'),
   passwordHash: text('password_hash'),
-  /** customer | support | admin. Admin is only effective once the email is verified. */
+  /** customer | support | admin | super_admin. Admin roles are only effective once the email is verified. */
   role: text('role').notNull().default('customer'),
   /** active | suspended | deleted */
   status: text('status').notNull().default('active'),
@@ -38,7 +38,28 @@ export const sessions = sqliteTable('sessions', {
   expiresAt: integer('expires_at').notNull(),
   ip: text('ip'),
   userAgent: text('user_agent'),
+  /** Set when this session passed an MFA check (TOTP or recovery code). Admin routes need it. */
+  mfaVerifiedAt: integer('mfa_verified_at'),
 }, t => [index('sessions_user_idx').on(t.userId)]);
+
+/** TOTP secret per admin, AES-GCM encrypted with MFA_ENCRYPTION_KEY (user id as additional data). `enrolledAt` is null while enrolment is pending. */
+export const mfaCredentials = sqliteTable('mfa_credentials', {
+  userId: text('user_id').primaryKey().references(() => accounts.userId),
+  secretEnc: text('secret_enc').notNull(),
+  createdAt: integer('created_at').notNull(),
+  enrolledAt: integer('enrolled_at'),
+  /** Highest 30 s TOTP step already accepted; a code for a step <= this is a replay. */
+  lastUsedStep: integer('last_used_step'),
+});
+
+/** Single-use recovery codes, stored only as HMAC-SHA-256 keyed with MFA_ENCRYPTION_KEY. */
+export const mfaRecoveryCodes = sqliteTable('mfa_recovery_codes', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull().references(() => accounts.userId),
+  hash: text('hash').notNull().unique(),
+  createdAt: integer('created_at').notNull(),
+  usedAt: integer('used_at'),
+}, t => [index('mfa_recovery_user_idx').on(t.userId)]);
 
 export const authTokens = sqliteTable('auth_tokens', {
   id: text('id').primaryKey(),
@@ -104,6 +125,24 @@ export const creditLedger = sqliteTable('credit_ledger', {
 }, t => [
   uniqueIndex('ledger_idem_uq').on(t.idempotencyKey),
   index('ledger_user_time_idx').on(t.userId, t.createdAt),
+]);
+
+/**
+ * Credit held for one in-flight gateway call (SEC-1). Open holds that have not expired count against
+ * the spendable balance. Rows are never deleted: status moves open -> settled | released.
+ */
+export const creditHolds = sqliteTable('credit_holds', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull().references(() => accounts.userId),
+  requestId: text('request_id').notNull(),
+  amountMicroUsd: integer('amount_micro_usd').notNull(),
+  /** open | settled | released */
+  status: text('status').notNull().default('open'),
+  createdAt: integer('created_at').notNull(),
+  expiresAt: integer('expires_at').notNull(),
+}, t => [
+  uniqueIndex('holds_request_uq').on(t.requestId),
+  index('holds_user_status_idx').on(t.userId, t.status, t.expiresAt),
 ]);
 
 export const payments = sqliteTable('payments', {
@@ -185,7 +224,40 @@ export const auditLogs = sqliteTable('audit_logs', {
   meta: text('meta'),
   ip: text('ip'),
   createdAt: integer('created_at').notNull(),
-}, t => [index('audit_time_idx').on(t.createdAt), index('audit_actor_idx').on(t.actorId)]);
+  // SEC-4 (migration 0006). All nullable: rows written before it have none of these and are not part of the chain.
+  seq: integer('seq'),
+  prevHash: text('prev_hash'),
+  hash: text('hash'),
+  actorRole: text('actor_role'),
+  before: text('before'),
+  after: text('after'),
+  reason: text('reason'),
+  result: text('result'),
+}, t => [index('audit_time_idx').on(t.createdAt), index('audit_actor_idx').on(t.actorId), uniqueIndex('audit_seq_uq').on(t.seq), index('audit_action_idx').on(t.action), index('audit_target_idx').on(t.targetId)]);
+
+/**
+ * A sensitive admin action waiting for a second person (SEC-2). kind: credit_adjustment | role_change.
+ * status: pending | approved | rejected | expired. Pending requests expire after 24 hours (`expiresAt`).
+ * `payload` is JSON: { amountUsd, note } or { role }. `requestKey` makes a retried request idempotent per requester.
+ */
+export const adminRequests = sqliteTable('admin_requests', {
+  id: text('id').primaryKey(),
+  kind: text('kind').notNull(),
+  targetUserId: text('target_user_id').notNull().references(() => accounts.userId),
+  payload: text('payload').notNull(),
+  reason: text('reason').notNull(),
+  requestedBy: text('requested_by').notNull().references(() => accounts.userId),
+  requestKey: text('request_key'),
+  status: text('status').notNull().default('pending'),
+  createdAt: integer('created_at').notNull(),
+  expiresAt: integer('expires_at').notNull(),
+  decidedBy: text('decided_by'),
+  decidedAt: integer('decided_at'),
+  decisionReason: text('decision_reason'),
+}, t => [
+  index('admin_requests_status_idx').on(t.status, t.createdAt),
+  uniqueIndex('admin_requests_key_uq').on(t.requestedBy, t.requestKey),
+]);
 
 /** Admin overrides per catalog model: availability and markup. */
 export const modelConfigs = sqliteTable('model_configs', {

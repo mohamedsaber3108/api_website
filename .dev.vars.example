@@ -8,6 +8,8 @@ APP_ENV=development
 PUBLIC_BASE_URL=http://127.0.0.1:5173
 # Comma separated. These accounts become admins once their email is verified.
 ADMIN_EMAILS=admin@example.com
+# Off unless "true": lets ADMIN_EMAILS grant admin even after a super_admin exists (MFA required, every use audited).
+# ADMIN_EMAILS_BREAKGLASS=true
 
 # Paid inference gateway (/api/v1/chat/completions). Both are required to enable it.
 INFERENCE_ENABLED=false
@@ -20,6 +22,10 @@ TRUST_CHATGPT_HEADERS=false
 # Behind your own reverse proxy (EC2 + Caddy): header with the real client IP, used for rate limits.
 # Leave empty on Cloudflare (cf-connecting-ip is used). Only set it if the proxy always overwrites the header.
 CLIENT_IP_HEADER=
+# Secret that encrypts admin MFA (TOTP) secrets. Required in production (admin routes refuse to open
+# without it). Make it on the server, e.g. `openssl rand -hex 32`. Never commit a value. Losing it means
+# every admin must enrol again. In APP_ENV=development an empty value uses a fixed local key.
+MFA_ENCRYPTION_KEY=
 # Optional free credit for new accounts (USD).
 SIGNUP_BONUS_USD=0
 
