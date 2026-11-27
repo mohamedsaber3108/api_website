@@ -3,6 +3,7 @@ import { getDb } from '../../db';
 import { incidents } from '../../db/schema';
 import { env } from 'cloudflare:workers';
 import { features } from './config';
+import { inferenceEnabled } from './flags';
 
 export async function healthReport() {
   let database: 'available' | 'unavailable' = 'unavailable';
@@ -18,7 +19,7 @@ export async function healthReport() {
     catalog: 'available',
     database,
     api_keys: database,
-    inference: features.inference() ? 'available' : 'not_configured',
+    inference: (await inferenceEnabled()) ? 'available' : 'not_configured',
     billing: features.billing() ? 'available' : 'not_configured',
     email: features.email() ? 'available' : 'not_configured',
   };

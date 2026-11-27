@@ -266,6 +266,17 @@ export const adminRequests = sqliteTable('admin_requests', {
   uniqueIndex('admin_requests_key_uq').on(t.requestedBy, t.requestKey),
 ]);
 
+/**
+ * Feature flags set from the admin (ADM-D1 slice 2). No row means "not switched off". `enabled` is 1 or 0.
+ * Key `inference` is the emergency stop. Written only through lib/server/flags.ts.
+ */
+export const featureFlags = sqliteTable('feature_flags', {
+  key: text('key').primaryKey(),
+  enabled: integer('enabled').notNull(),
+  updatedAt: integer('updated_at').notNull(),
+  updatedBy: text('updated_by'),
+});
+
 /** Admin overrides per catalog model: availability and markup. */
 export const modelConfigs = sqliteTable('model_configs', {
   modelId: text('model_id').primaryKey(),

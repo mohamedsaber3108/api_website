@@ -3,6 +3,7 @@ import { getDb } from '../../../../db';
 import { sessions } from '../../../../db/schema';
 import { getPrincipal, publicUser, requireUser } from '../../../../lib/server/auth';
 import { features, STAFF_IDLE_MS } from '../../../../lib/server/config';
+import { inferenceEnabled } from '../../../../lib/server/flags';
 import { handle, json, requireSameOrigin } from '../../../../lib/server/http';
 
 export const dynamic = 'force-dynamic';
@@ -16,7 +17,7 @@ export const GET = handle(async request => {
   const p = await getPrincipal(request, { peek });
   return json({
     user: p ? publicUser(p) : null,
-    features: { inference: features.inference(), billing: features.billing(), email: features.email(), chatgpt: features.chatgptIdentity() },
+    features: { inference: await inferenceEnabled(), billing: features.billing(), email: features.email(), chatgpt: features.chatgptIdentity() },
     ...(p?.sessionEnds ? { sessionLimits: { ...p.sessionEnds, now: Date.now() } } : {}),
   });
 });
