@@ -193,7 +193,7 @@ function ModelsTab({ tr, fmt }: P) {
   const [error, setError] = useState('');
   const load = useCallback(() => api<{ defaultMarkupPercent: number; configs: ModelCfg[] }>('/api/admin/models').then(setData).catch(e => setError(errorMessage(e))), []);
   useEffect(() => { load(); }, [load]);
-  const save = async (body: { modelId: string; enabled: boolean; markupPercent: number | null; note: string | null }) => { try { await api('/api/admin/models', { method: 'PUT', body }); await load(); } catch (e) { setError(errorMessage(e)); } };
+  const save = async (body: { modelId: string; enabled: boolean; markupPercent: number | null; note: string | null }) => { try { await api('/api/admin/models', { method: 'PUT', body }); await load(); } catch (e) { setError(apiMsg(e, tr)); } };
   return <div className="dash-panel"><h3>{tr('النماذج والتسعير', 'Models & pricing')}</h3><p className="muted">{tr('الهامش الافتراضي', 'Default markup')}: {data?.defaultMarkupPercent ?? '…'}% ({tr('يُضبط بالمتغير', 'set via')} DEFAULT_MARKUP_PERCENT)</p>{error && <p className="live-error">{error}</p>}
     <form className="form-row" onSubmit={e => { e.preventDefault(); save({ modelId: form.modelId.trim(), enabled: form.enabled, markupPercent: form.markup === '' ? null : Number(form.markup), note: form.note || null }); setForm({ modelId: '', enabled: true, markup: '', note: '' }); }}>
       <input required placeholder="provider/model-id" value={form.modelId} onChange={e => setForm({ ...form, modelId: e.target.value })} /><input type="number" min={0} max={500} placeholder={tr('هامش %', 'Markup %')} value={form.markup} onChange={e => setForm({ ...form, markup: e.target.value })} /><label className="chk"><input type="checkbox" checked={form.enabled} onChange={e => setForm({ ...form, enabled: e.target.checked })} />{tr('مفعّل', 'Enabled')}</label><input placeholder={tr('ملاحظة', 'Note')} value={form.note} onChange={e => setForm({ ...form, note: e.target.value })} /><button className="button-dark">{tr('حفظ', 'Save')}</button></form>
@@ -217,7 +217,8 @@ function AuditTab({ tr, fmt }: P) {
   const [form, setForm] = useState(empty);
   const [events, setEvents] = useState<AuditEvent[]>([]);
   const [error, setError] = useState('');
-  const [busy, setBusy] = useState(false);
+  // true until the first load ends, so "No matching entries" and "Results: 0" never show early.
+  const [busy, setBusy] = useState(true);
   const resultText = (r: AuditEvent['result']) => (r === 'denied' ? tr('مرفوض', 'Denied') : r === 'failed' ? tr('فشل', 'Failed') : r === 'success' ? tr('نجح', 'Success') : tr('قديم', 'Legacy'));
   const load = useCallback(async (f: typeof empty) => {
     const qs = new URLSearchParams({ limit: '100' });
@@ -228,7 +229,7 @@ function AuditTab({ tr, fmt }: P) {
     setBusy(true);
     try { setEvents((await api<{ events: AuditEvent[] }>(`/api/admin/audit?${qs}`)).events); setError(''); } catch (e) { setError(errorMessage(e)); } finally { setBusy(false); }
   }, []);
-  useEffect(() => { api<{ events: AuditEvent[] }>('/api/admin/audit?limit=100').then(r => setEvents(r.events)).catch(e => setError(errorMessage(e))); }, []);
+  useEffect(() => { api<{ events: AuditEvent[] }>('/api/admin/audit?limit=100').then(r => setEvents(r.events)).catch(e => setError(errorMessage(e))).finally(() => setBusy(false)); }, []);
   const field = (id: string, label: string, el: React.ReactNode) => <label htmlFor={id} style={{ display: 'grid', gap: 4 }}>{label}{el}</label>;
   const set = (k: keyof typeof empty) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setForm({ ...form, [k]: e.target.value });
   return <div className="dash-panel"><h3>{tr('سجل التدقيق', 'Audit log')}</h3>
@@ -244,10 +245,10 @@ function AuditTab({ tr, fmt }: P) {
     </form>
     <p className="muted">{tr('الأوقات بتوقيت جهازك.', 'Times are in your local time.')}</p>
     {error && <p className="live-error" role="alert">{error}</p>}
-    <p role="status" className="muted">{tr(`عدد النتائج: ${events.length}`, `Results: ${events.length}`)}</p>
+    <p role="status" className="muted">{busy ? tr('جارٍ التحميل…', 'Loading…') : tr(`عدد النتائج: ${events.length}`, `Results: ${events.length}`)}</p>
     <div className="rows">{events.map(e => <div key={e.id}><span><b>{e.action}</b> <span className="role-pill">{resultText(e.result)}</span>
-      <small>{fmt(e.createdAt)} · {tr('المنفِّذ', 'Actor')}: {e.actorEmail ?? e.actorId ?? '—'}{e.actorRole ? ` (${e.actorRole})` : ''} → {e.targetType ?? '—'}:{e.targetId ?? '—'}{e.ip ? ` · ${e.ip}` : ''}</small>
+      <small>{fmt(e.createdAt)} · {tr('المنفِّذ', 'Actor')}: <bdi>{e.actorEmail ?? e.actorId ?? '—'}</bdi>{e.actorRole ? <> (<bdi>{e.actorRole}</bdi>)</> : ''} {tr('على', 'on')} <bdi>{e.targetType ?? '—'}:{e.targetId ?? '—'}</bdi>{e.ip ? <> · <bdi>{e.ip}</bdi></> : ''}</small>
       {e.reason && <small>{tr('السبب', 'Reason')}: {e.reason}</small>}
-      {(e.before != null || e.after != null) && <small dir="ltr">{tr('قبل', 'Before')}: {JSON.stringify(e.before)} · {tr('بعد', 'After')}: {JSON.stringify(e.after)}</small>}</span></div>)}
+      {(e.before != null || e.after != null) && <small dir="ltr" style={{ overflowWrap: 'anywhere' }}>{tr('قبل', 'Before')}: {JSON.stringify(e.before)} · {tr('بعد', 'After')}: {JSON.stringify(e.after)}</small>}</span></div>)}
       {!events.length && !busy && !error && <p className="muted">{tr('لا توجد سجلات مطابقة.', 'No matching entries.')}</p>}</div></div>;
 }
