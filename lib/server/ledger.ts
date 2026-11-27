@@ -83,15 +83,15 @@ export async function getBalanceSummary(userId: string): Promise<{ balanceMicroU
  * Calling again with the same request id is a no-op that returns true when the hold already exists.
  * Raw D1 is used because drizzle cannot put an INSERT ... SELECT with a bound WHERE into db.batch.
  */
-export async function reserveCredit(userId: string, requestId: string, amount: number): Promise<boolean> {
+export async function reserveCredit(userId: string, requestId: string, amount: number, keyId: string | null = null): Promise<boolean> {
   const now = Date.now();
   const [, found] = await d1().batch([
     d1().prepare(
-      `INSERT INTO credit_holds (id, user_id, request_id, amount_micro_usd, status, created_at, expires_at)
-       SELECT ?3, ?1, ?4, ?5, 'open', ?2, ?6
+      `INSERT INTO credit_holds (id, user_id, request_id, amount_micro_usd, status, created_at, expires_at, key_id)
+       SELECT ?3, ?1, ?4, ?5, 'open', ?2, ?6, ?7
        WHERE ${BALANCE} - ${OPEN_HOLDS} >= ?5
        ON CONFLICT DO NOTHING`,
-    ).bind(userId, now, crypto.randomUUID(), requestId, amount, now + HOLD_TTL_MS),
+    ).bind(userId, now, crypto.randomUUID(), requestId, amount, now + HOLD_TTL_MS, keyId),
     d1().prepare('SELECT id FROM credit_holds WHERE request_id = ?1').bind(requestId),
   ]);
   return (found.results?.length ?? 0) > 0;

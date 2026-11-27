@@ -24,6 +24,8 @@ export const accounts = sqliteTable('accounts', {
   lastLoginAt: integer('last_login_at'),
   /** JSON: { lang, theme, currency } */
   preferences: text('preferences'),
+  /** FEAT-2: optional monthly spend limit for the whole account (micro-USD). null = no limit. */
+  monthlyLimitMicroUsd: integer('monthly_limit_micro_usd'),
 }, t => [
   uniqueIndex('accounts_password_email_uq').on(t.email).where(sql`auth_provider = 'password'`),
   index('accounts_email_idx').on(t.email),
@@ -86,6 +88,8 @@ export const apiKeys = sqliteTable('api_keys', {
   lastUsedAt: integer('last_used_at'),
   rateLimitPerMin: integer('rate_limit_per_min').notNull().default(60),
   rotatedFromId: text('rotated_from_id'),
+  /** FEAT-2: optional monthly spend limit for this key (micro-USD). null = no limit. */
+  monthlyLimitMicroUsd: integer('monthly_limit_micro_usd'),
 }, t => [index('keys_user_idx').on(t.userId)]);
 
 export const usageEvents = sqliteTable('usage_events', {
@@ -106,6 +110,7 @@ export const usageEvents = sqliteTable('usage_events', {
   source: text('source').notNull().default('api'),
 }, t => [
   index('usage_user_time_idx').on(t.userId, t.createdAt),
+  index('usage_key_time_idx').on(t.keyId, t.createdAt),
   uniqueIndex('usage_request_uq').on(t.requestId),
 ]);
 
@@ -140,6 +145,8 @@ export const creditHolds = sqliteTable('credit_holds', {
   status: text('status').notNull().default('open'),
   createdAt: integer('created_at').notNull(),
   expiresAt: integer('expires_at').notNull(),
+  /** FEAT-2: the API key this call used (null for the playground), so per-key limits can count open holds. */
+  keyId: text('key_id'),
 }, t => [
   uniqueIndex('holds_request_uq').on(t.requestId),
   index('holds_user_status_idx').on(t.userId, t.status, t.expiresAt),
