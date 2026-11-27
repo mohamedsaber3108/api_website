@@ -5,6 +5,7 @@ import { accounts } from '../../../../db/schema';
 import { createAuthToken } from '../../../../lib/server/auth';
 import { baseUrl, isProduction } from '../../../../lib/server/config';
 import { sendEmail } from '../../../../lib/server/email';
+import { mailLang, renderMail } from '../../../../lib/server/mail-templates';
 import { clientIp, emailSchema, handle, json, parseBody, requireSameOrigin } from '../../../../lib/server/http';
 import { rateLimit } from '../../../../lib/server/ratelimit';
 
@@ -23,7 +24,7 @@ export const POST = handle(async request => {
     const token = await createAuthToken(account.userId, 'reset_password', 3600 * 1000);
     devToken = token;
     const link = `${baseUrl(request)}/reset-password?token=${token}`;
-    await sendEmail({ to: email, subject: 'Reset your Wasl AI password', text: `Use this link to choose a new password:\n${link}\n\nThe link expires in 1 hour. If you did not request this, you can ignore this message.` });
+    await sendEmail({ to: email, ...renderMail('reset_password', mailLang(account.preferences, request), { link }) });
   }
   return json({ ok: true, ...(!isProduction() && devToken ? { dev_reset_token: devToken } : {}) }, 202);
 });
