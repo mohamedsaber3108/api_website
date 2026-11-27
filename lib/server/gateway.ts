@@ -138,6 +138,7 @@ async function recordUsage(ctx: ChatContext, model: string, billing: Billing, us
   const providerMicro = status === 'error' ? 0 : typeof usage?.cost === 'number' && usage.cost >= 0 ? (usage.cost > 0 ? Math.max(1, Math.round(usage.cost * 1_000_000)) : 0) : computed;
   const wanted = status === 'error' ? 0 : chargeMicro(providerMicro, billing.markup);
   const charged = holdMicro === null ? wanted : Math.min(wanted, holdMicro);
+  if (holdMicro !== null && wanted > holdMicro) console.error('charge capped at hold', ctx.requestId, `wanted=${wanted} hold=${holdMicro}`);
   const db = getDb();
   try {
     await db.batch([
@@ -163,6 +164,7 @@ async function recordUsage(ctx: ChatContext, model: string, billing: Billing, us
     ]);
   } catch (e) {
     console.error('usage metering failed', ctx.requestId, errText(e));
+    if (holdMicro !== null) console.error('hold left open after failed settle; it expires on its own, reconcile if charged', ctx.requestId);
   }
   return { charged, inTokens, outTokens };
 }
