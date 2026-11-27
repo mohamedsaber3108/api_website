@@ -16,6 +16,7 @@ afterAll(async () => { await h.dispose(); });
 beforeEach(async () => {
   await getDb().update(accounts).set({ role: 'customer' }).where(inArray(accounts.role, ['admin', 'super_admin']));
   await getDb().delete(featureFlags);
+  await getDb().delete(adminRequests).where(eq(adminRequests.kind, 'flag_change'));
   resetFlagCache();
   env.INFERENCE_ENABLED = 'true';
   env.OPENROUTER_API_KEY = 'sk-or-not-a-real-key';
