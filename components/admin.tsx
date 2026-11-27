@@ -1,5 +1,5 @@
 'use client';
-import { useCallback, useEffect, useState } from 'react';
+import { Fragment, useCallback, useEffect, useState } from 'react';
 import { Activity, Cpu, FileClock, LayoutDashboard, LifeBuoy, ShieldCheck, SlidersHorizontal, Users } from 'lucide-react';
 import { api, ApiError, errorMessage, usd, type SessionInfo } from '../lib/client-api';
 import { approvalCodeMessage } from '../lib/admin-error';
@@ -9,6 +9,8 @@ import SettingsTab from './admin-settings';
 import SessionTimeout from './session-timeout';
 import ConfirmDialog from './confirm-dialog';
 import { onTabListKeyDown } from '../lib/tabs';
+import DataTable from './data-table';
+import { fmtNum, type Lang } from '../lib/format';
 
 type Tab = 'overview' | 'users' | 'approvals' | 'tickets' | 'models' | 'settings' | 'incidents' | 'audit';
 type Overview = { users: { total: number; last30Days: number }; activeKeys: number; openTickets: number; revenueLast30DaysMinor: number; usageLast30Days: { requests: number; billedMicroUsd: number; providerMicroUsd: number }; customerCreditsOutstandingMicroUsd: number; recentSignups: { id: string; email: string; name: string | null; createdAt: number }[] };
@@ -44,9 +46,9 @@ export default function AdminConsole({ lang, session }: { lang: 'ar' | 'en'; ses
     { id: 'incidents', icon: Activity, label: tr('الحوادث', 'Incidents'), admin: false },
     { id: 'audit', icon: FileClock, label: tr('سجل التدقيق', 'Audit log'), admin: true, superOnly: true },
   ];
-  if (mfa !== 'ok') return <main className="inner-page"><section className="page-heading section"><span className="section-kicker">WASL / ADMIN</span><h1>{tr('لوحة الإدارة', 'Admin console')}</h1><div className="page-heading-art">◈</div></section>
+  if (mfa !== 'ok') return <main className="inner-page"><section className="page-heading section"><span className="section-kicker" lang="en">WASL / ADMIN</span><h1>{tr('لوحة الإدارة', 'Admin console')}</h1><div className="page-heading-art">◈</div></section>
     <section className="section">{mfa === 'checking' ? <p className="muted" role="status">{tr('جارٍ التحميل…', 'Loading…')}</p> : <MfaPanel tr={tr} reason={mfaReason} onVerified={() => { setMfaReason(''); setMfa('ok'); }} />}</section></main>;
-  return <main className="inner-page"><section className="page-heading section"><span className="section-kicker">WASL / ADMIN</span><h1>{tr('لوحة الإدارة', 'Admin console')}</h1><div className="page-heading-art">◈</div></section>
+  return <main className="inner-page"><section className="page-heading section"><span className="section-kicker" lang="en">WASL / ADMIN</span><h1>{tr('لوحة الإدارة', 'Admin console')}</h1><div className="page-heading-art">◈</div></section>
     <SessionTimeout tr={tr} />
     {stepUpOpen && <section className="section"><MfaPanel tr={tr} reason={mfaReason} onVerified={() => { setMfaReason(''); setStepUpOpen(false); }} /></section>}
     <section className="section dashboard-app"><aside className="dash-nav"><div className="dash-tablist" role="tablist" aria-orientation="vertical" aria-label={tr('أقسام الإدارة', 'Admin sections')} onKeyDown={onTabListKeyDown}>{tabs.filter(t => (isAdmin || !t.admin) && (isSuper || !t.superOnly)).map(t => <button key={t.id} id={`admin-tab-${t.id}`} type="button" role="tab" aria-selected={tab === t.id} aria-controls="admin-panel" tabIndex={tab === t.id ? 0 : -1} className={tab === t.id ? 'dash-selected' : ''} onClick={() => setTab(t.id)}><t.icon size={18} />{t.label}</button>)}</div></aside>
@@ -80,15 +82,17 @@ function OverviewTab({ tr, fmt }: P) {
   const [error, setError] = useState('');
   useEffect(() => { api<Overview>('/api/admin/overview').then(setO).catch(e => setError(errorMessage(e))); }, []);
   if (error) return <p className="live-error">{error}</p>;
-  if (!o) return <p className="muted">…</p>;
+  if (!o) return <p className="muted" role="status">{tr('جارٍ تحميل نظرة عامة الإدارة…', 'Loading the admin overview…')}</p>;
+  const lang = tr('ar', 'en') as Lang;
+  const n = (x: number) => fmtNum(x, lang);
   const margin = o.usageLast30Days.billedMicroUsd - o.usageLast30Days.providerMicroUsd;
   return <><div className="stat-grid four">
-    <div className="stat-card"><span>{tr('المستخدمون', 'Users')}</span><strong>{o.users.total}</strong><small>+{o.users.last30Days} / 30d</small></div>
-    <div className="stat-card"><span>{tr('إيراد 30 يومًا', 'Revenue 30d')}</span><strong>${(o.revenueLast30DaysMinor / 100).toFixed(2)}</strong></div>
-    <div className="stat-card"><span>{tr('طلبات 30 يومًا', 'Requests 30d')}</span><strong>{o.usageLast30Days.requests}</strong><small>{tr('هامش', 'margin')} {usd(margin, 4)}</small></div>
+    <div className="stat-card"><span>{tr('المستخدمون', 'Users')}</span><strong>{n(o.users.total)}</strong><small>+{n(o.users.last30Days)} {tr('خلال ٣٠ يومًا', '/ 30d')}</small></div>
+    <div className="stat-card"><span>{tr('إيراد 30 يومًا', 'Revenue 30d')}</span><strong><bdi dir="ltr">${fmtNum(o.revenueLast30DaysMinor / 100, lang, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</bdi></strong></div>
+    <div className="stat-card"><span>{tr('طلبات 30 يومًا', 'Requests 30d')}</span><strong>{n(o.usageLast30Days.requests)}</strong><small>{tr('هامش', 'margin')} {usd(margin, 4)}</small></div>
     <div className="stat-card"><span>{tr('أرصدة العملاء', 'Customer credits')}</span><strong>{usd(o.customerCreditsOutstandingMicroUsd)}</strong></div>
-    <div className="stat-card"><span>{tr('مفاتيح فعّالة', 'Active keys')}</span><strong>{o.activeKeys}</strong></div>
-    <div className="stat-card"><span>{tr('تذاكر مفتوحة', 'Open tickets')}</span><strong>{o.openTickets}</strong></div>
+    <div className="stat-card"><span>{tr('مفاتيح فعّالة', 'Active keys')}</span><strong>{n(o.activeKeys)}</strong></div>
+    <div className="stat-card"><span>{tr('تذاكر مفتوحة', 'Open tickets')}</span><strong>{n(o.openTickets)}</strong></div>
   </div><div className="dash-panel"><h3>{tr('أحدث التسجيلات', 'Recent sign-ups')}</h3><div className="rows">{o.recentSignups.map(u => <div key={u.id}><span><b>{u.name || u.email}</b><small>{u.email} · {fmt(u.createdAt)}</small></span></div>)}</div></div></>;
 }
 
@@ -108,13 +112,13 @@ function UsersTab({ tr, fmt, onStepUp, isSuper }: P & { onStepUp: () => void; is
   return <div className="dash-panel"><div className="panel-head"><h3>{tr('المستخدمون', 'Users')}</h3><input aria-label={tr('بحث بالبريد أو الاسم', 'Search email or name')} placeholder={tr('بحث بالبريد أو الاسم', 'Search email or name')} value={q} onChange={e => setQ(e.target.value)} /></div>
     {error && <p className="live-error" role="alert">{error}</p>}
     {notice && <p className="notice-ok" role="status">{notice}</p>}
-    <div className="rows">{users.map(u => <div key={u.id} className="row-wrap"><span><b>{u.name || u.email}</b><small>{u.email} · {u.provider} · {u.emailVerified ? '✓' : tr('غير مؤكد', 'unverified')} · {fmt(u.createdAt)} · {usd(u.balanceMicroUsd, 4)}</small></span>
+    <DataTable caption={tr('المستخدمون', 'Users')} heads={[tr('المستخدم', 'User'), tr('طريقة الدخول', 'Sign-in'), tr('حالة البريد', 'Email status'), tr('تاريخ الإنشاء', 'Created'), tr('الرصيد', 'Balance'), tr('إجراءات', 'Actions')]}>{users.map(u => <Fragment key={u.id}><tr><th scope="row"><b><bdi>{u.name || u.email}</bdi></b>{u.name && <><br /><small><bdi>{u.email}</bdi></small></>}</th><td>{u.provider}</td><td>{u.emailVerified ? tr('مؤكد', 'Verified') : tr('غير مؤكد', 'Unverified')}</td><td>{fmt(u.createdAt)}</td><td><bdi dir="ltr">{usd(u.balanceMicroUsd, 4)}</bdi></td><td>
       <span className="row-actions">
         <select aria-label={tr('الدور', 'Role')} value={u.role} disabled={u.status === 'deleted' || (!isSuper && isAdminLevel(u.role))} onChange={e => { const role = e.target.value; if (isAdminLevel(role)) setPromote({ id: u.id, email: u.email, role, reason: '', error: '' }); else patch(u.id, { role }); }}><option>customer</option><option>support</option>{(isSuper || u.role === 'admin') && <option>admin</option>}{(isSuper || u.role === 'super_admin') && <option>super_admin</option>}</select>
         {u.status !== 'deleted' && <button className="pill-link" disabled={!isSuper && isAdminLevel(u.role)} onClick={() => setSuspend(u)}>{u.status === 'active' ? tr('فعّال', 'Active') : u.status === 'suspended' ? tr('موقوف', 'Suspended') : u.status}</button>}
-        <button className="pill-link" onClick={() => setCredit({ id: u.id, amount: '', note: '' })}>{tr('رصيد', 'Credit')}</button></span>
-      {credit?.id === u.id && <form className="form-row" onSubmit={async e => { e.preventDefault(); try { await api(`/api/admin/users/${u.id}/credits`, { method: 'POST', body: { amountUsd: Number(credit.amount), note: credit.note, requestKey: crypto.randomUUID() } }); setCredit(null); setError(''); sent(); await load(); } catch (err) { if (err instanceof ApiError && (err.code === 'mfa_recent_required' || err.code === 'mfa_required')) onStepUp(); else setError(apiMsg(err, tr)); } }}>
-        <input type="number" step="0.01" required aria-label={tr('المبلغ بالدولار (موجب أو سالب)', 'Amount in USD (+/-)')} placeholder="USD (+/-)" value={credit.amount} onChange={e => setCredit({ ...credit, amount: e.target.value })} /><input required minLength={3} aria-label={tr('السبب', 'Reason')} placeholder={tr('السبب', 'Reason')} value={credit.note} onChange={e => setCredit({ ...credit, note: e.target.value })} /><button className="button-dark">{tr('طلب موافقة', 'Request approval')}</button><button type="button" className="link" aria-label={tr('إغلاق', 'Close')} onClick={() => setCredit(null)}>×</button></form>}</div>)}</div>
+        <button className="pill-link" onClick={() => setCredit({ id: u.id, amount: '', note: '' })}>{tr('رصيد', 'Credit')}</button></span></td></tr>
+      {credit?.id === u.id && <tr><td colSpan={6}><form className="form-row" onSubmit={async e => { e.preventDefault(); try { await api(`/api/admin/users/${u.id}/credits`, { method: 'POST', body: { amountUsd: Number(credit.amount), note: credit.note, requestKey: crypto.randomUUID() } }); setCredit(null); setError(''); sent(); await load(); } catch (err) { if (err instanceof ApiError && (err.code === 'mfa_recent_required' || err.code === 'mfa_required')) onStepUp(); else setError(apiMsg(err, tr)); } }}>
+        <input type="number" step="0.01" required aria-label={tr('المبلغ بالدولار (موجب أو سالب)', 'Amount in USD (+/-)')} placeholder="USD (+/-)" value={credit.amount} onChange={e => setCredit({ ...credit, amount: e.target.value })} /><input required minLength={3} aria-label={tr('السبب', 'Reason')} placeholder={tr('السبب', 'Reason')} value={credit.note} onChange={e => setCredit({ ...credit, note: e.target.value })} /><button className="button-dark">{tr('طلب موافقة', 'Request approval')}</button><button type="button" className="link" aria-label={tr('إغلاق', 'Close')} onClick={() => setCredit(null)}>×</button></form></td></tr>}</Fragment>)}</DataTable>
     {promote && <Dialog title={<>{tr('طلب ترقية إلى ', 'Request promotion to ')}<bdi>{promote.role}</bdi></>} onClose={() => setPromote(null)}>
       <form className="auth-form" onSubmit={async e => { e.preventDefault(); try { await api(`/api/admin/users/${promote.id}`, { method: 'PATCH', body: { role: promote.role, reason: promote.reason.trim(), requestKey: crypto.randomUUID() } }); setPromote(null); setError(''); sent(); } catch (err) { setPromote({ ...promote, error: apiMsg(err, tr) }); } }}>
         <p><bdi>{promote.email}</bdi></p>
@@ -161,11 +165,11 @@ function ApprovalsTab({ tr, fmt, me, isSuper }: P & { me: string; isSuper: boole
     <p className="muted">{tr('كل تعديل رصيد وكل ترقية لمدير يحتاج موافقة شخص آخر. تنتهي الطلبات بعد ٢٤ ساعة.', 'Every credit change and every promotion to admin needs a second person. Requests expire after 24 hours.')}</p>
     {error && <p className="live-error" role="alert">{error}</p>}
     {notice && <p className="notice-ok" role="status">{notice}</p>}
-    {items.length === 0 ? <p className="muted">—</p> : <div className="rows">{items.map(r => <div key={r.id} className="row-wrap"><span><b>{describe(r)}</b><small>{tr('طلب من', 'By')} <bdi>{r.requestedBy.email}</bdi> · {fmt(r.createdAt)} · {tr('ينتهي', 'expires')} {fmt(r.expiresAt)} · {r.reason}</small></span>
+    {items.length === 0 ? <p className="muted">—</p> : <DataTable caption={tr('طلبات تنتظر موافقة', 'Requests waiting for approval')} heads={[tr('الطلب', 'Request'), tr('طلب من', 'Requested by'), tr('تاريخ الطلب', 'Created'), tr('ينتهي', 'Expires'), tr('السبب', 'Reason'), tr('إجراءات', 'Actions')]}>{items.map(r => <tr key={r.id}><th scope="row"><b>{describe(r)}</b></th><td><bdi>{r.requestedBy.email}</bdi></td><td>{fmt(r.createdAt)}</td><td>{fmt(r.expiresAt)}</td><td>{r.reason}</td><td>
       <span className="row-actions">
         {canApprove(r) && <button className="pill-link" onClick={() => setOpen({ req: r, action: 'approve' })}>{tr('موافقة', 'Approve')}</button>}
         {(canApprove(r) || r.requestedBy.id === me || isSuper) && <button className="pill-link" onClick={() => setOpen({ req: r, action: 'reject' })}>{r.requestedBy.id === me ? tr('إلغاء الطلب', 'Cancel request') : tr('رفض', 'Reject')}</button>}
-      </span></div>)}</div>}
+      </span></td></tr>)}</DataTable>}
     {open && <Dialog title={title} onClose={close}>
       {stepUp ? <MfaPanel tr={tr} reason={tr('للموافقة على تعديل رصيد أدخل رمزًا جديدًا (صالح ١٥ دقيقة). ما كتبته محفوظ.', 'To approve a credit change, enter a fresh code (valid for 15 minutes). What you typed is kept.')} onVerified={() => setStepUp(false)} />
       : <form className="auth-form" onSubmit={submit}>
@@ -203,10 +207,10 @@ function ModelsTab({ tr, fmt }: P) {
   const load = useCallback(() => api<{ defaultMarkupPercent: number; configs: ModelCfg[] }>('/api/admin/models').then(setData).catch(e => setError(errorMessage(e))), []);
   useEffect(() => { load(); }, [load]);
   const save = async (body: { modelId: string; enabled: boolean; markupPercent: number | null; note: string | null }) => { try { await api('/api/admin/models', { method: 'PUT', body }); await load(); } catch (e) { setError(apiMsg(e, tr)); } };
-  return <div className="dash-panel"><h3>{tr('النماذج والتسعير', 'Models & pricing')}</h3><p className="muted">{tr('الهامش الافتراضي', 'Default markup')}: {data?.defaultMarkupPercent ?? '…'}% ({tr('يُضبط بالمتغير', 'set via')} DEFAULT_MARKUP_PERCENT)</p>{error && <p className="live-error">{error}</p>}
+  return <div className="dash-panel"><h3>{tr('النماذج والتسعير', 'Models & pricing')}</h3><p className="muted">{tr('الهامش الافتراضي', 'Default markup')}: {data?.defaultMarkupPercent ?? '…'}% ({tr('يُضبط بالمتغير', 'set via')} <code dir="ltr">DEFAULT_MARKUP_PERCENT</code>)</p>{error && <p className="live-error">{error}</p>}
     <form className="form-row" onSubmit={e => { e.preventDefault(); save({ modelId: form.modelId.trim(), enabled: form.enabled, markupPercent: form.markup === '' ? null : Number(form.markup), note: form.note || null }); setForm({ modelId: '', enabled: true, markup: '', note: '' }); }}>
       <input required placeholder="provider/model-id" value={form.modelId} onChange={e => setForm({ ...form, modelId: e.target.value })} /><input type="number" min={0} max={500} placeholder={tr('هامش %', 'Markup %')} value={form.markup} onChange={e => setForm({ ...form, markup: e.target.value })} /><label className="chk"><input type="checkbox" checked={form.enabled} onChange={e => setForm({ ...form, enabled: e.target.checked })} />{tr('مفعّل', 'Enabled')}</label><input placeholder={tr('ملاحظة', 'Note')} value={form.note} onChange={e => setForm({ ...form, note: e.target.value })} /><button className="button-dark">{tr('حفظ', 'Save')}</button></form>
-    <div className="rows">{data?.configs.map(c => <div key={c.modelId}><span><b>{c.modelId}</b><small>{c.markupPercent ?? tr('افتراضي', 'default')}% · {c.note || ''} · {fmt(c.updatedAt)}</small></span><button className="pill-link" onClick={() => save({ modelId: c.modelId, enabled: !c.enabled, markupPercent: c.markupPercent, note: c.note })}>{c.enabled ? tr('مفعّل', 'enabled') : tr('معطّل', 'disabled')}</button></div>)}</div></div>;
+    <div className="rows">{data?.configs.map(c => <div key={c.modelId}><span><b><bdi dir="ltr">{c.modelId}</bdi></b><small>{c.markupPercent ?? tr('افتراضي', 'default')}% · {c.note || ''} · {fmt(c.updatedAt)}</small></span><button className="pill-link" onClick={() => save({ modelId: c.modelId, enabled: !c.enabled, markupPercent: c.markupPercent, note: c.note })}>{c.enabled ? tr('مفعّل', 'enabled') : tr('معطّل', 'disabled')}</button></div>)}</div></div>;
 }
 
 function IncidentsTab({ tr, fmt, canEdit }: P & { canEdit: boolean }) {
@@ -254,10 +258,10 @@ function AuditTab({ tr, fmt }: P) {
     </form>
     <p className="muted">{tr('الأوقات بتوقيت جهازك.', 'Times are in your local time.')}</p>
     {error && <p className="live-error" role="alert">{error}</p>}
-    <p role="status" className="muted">{busy ? tr('جارٍ التحميل…', 'Loading…') : tr(`عدد النتائج: ${events.length}`, `Results: ${events.length}`)}</p>
-    <div className="rows">{events.map(e => <div key={e.id}><span><b>{e.action}</b> <span className="role-pill">{resultText(e.result)}</span>
-      <small>{fmt(e.createdAt)} · {tr('المنفِّذ', 'Actor')}: <bdi>{e.actorEmail ?? e.actorId ?? '—'}</bdi>{e.actorRole ? <> (<bdi>{e.actorRole}</bdi>)</> : ''} {tr('على', 'on')} <bdi>{e.targetType ?? '—'}:{e.targetId ?? '—'}</bdi>{e.ip ? <> · <bdi>{e.ip}</bdi></> : ''}</small>
-      {e.reason && <small>{tr('السبب', 'Reason')}: {e.reason}</small>}
-      {(e.before != null || e.after != null) && <small dir="ltr" style={{ overflowWrap: 'anywhere' }}>{tr('قبل', 'Before')}: {JSON.stringify(e.before)} · {tr('بعد', 'After')}: {JSON.stringify(e.after)}</small>}</span></div>)}
-      {!events.length && !busy && !error && <p className="muted">{tr('لا توجد سجلات مطابقة.', 'No matching entries.')}</p>}</div></div>;
+    <p role="status" className="muted">{busy ? tr('جارٍ التحميل…', 'Loading…') : tr(`عدد النتائج: ${fmtNum(events.length, 'ar')}`, `Results: ${fmtNum(events.length, 'en')}`)}</p>
+    {events.length > 0 && <DataTable caption={tr('سجل التدقيق', 'Audit log')} heads={[tr('الإجراء', 'Action'), tr('النتيجة', 'Result'), tr('الوقت', 'Time'), tr('المنفِّذ', 'Actor'), tr('الهدف', 'Target'), 'IP', tr('السبب', 'Reason'), tr('التغيير', 'Change')]}>{events.map(e => <tr key={e.id}><th scope="row"><b><bdi dir="ltr">{e.action}</bdi></b></th><td><span className="role-pill">{resultText(e.result)}</span></td>
+      <td>{fmt(e.createdAt)}</td><td><bdi>{e.actorEmail ?? e.actorId ?? '—'}</bdi>{e.actorRole ? <> (<bdi>{e.actorRole}</bdi>)</> : ''}</td><td><bdi>{e.targetType ?? '—'}:{e.targetId ?? '—'}</bdi></td><td>{e.ip ? <bdi>{e.ip}</bdi> : '—'}</td>
+      <td>{e.reason ?? '—'}</td>
+      <td>{(e.before != null || e.after != null) ? <small dir="ltr" style={{ overflowWrap: 'anywhere' }}>{tr('قبل', 'Before')}: {JSON.stringify(e.before)} · {tr('بعد', 'After')}: {JSON.stringify(e.after)}</small> : '—'}</td></tr>)}</DataTable>}
+      {!events.length && !busy && !error && <p className="muted">{tr('لا توجد سجلات مطابقة.', 'No matching entries.')}</p>}</div>;
 }
