@@ -56,3 +56,12 @@ describe('source checks', () => {
     expect(dash).not.toMatch(/\.toLocaleString\(\)/);
   });
 });
+
+describe('admin digits and env name (PR 26 review)', () => {
+  it('revenue and audit count use fmtNum, the env name sits in code dir=ltr', () => {
+    const src = read('components/admin.tsx');
+    expect(src).toContain('fmtNum(o.revenueLast30DaysMinor / 100, lang');
+    expect(src).toContain("fmtNum(events.length, 'ar')");
+    expect(src).toContain('<code dir="ltr">DEFAULT_MARKUP_PERCENT</code>');
+  });
+});

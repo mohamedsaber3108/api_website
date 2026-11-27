@@ -88,7 +88,7 @@ function OverviewTab({ tr, fmt }: P) {
   const margin = o.usageLast30Days.billedMicroUsd - o.usageLast30Days.providerMicroUsd;
   return <><div className="stat-grid four">
     <div className="stat-card"><span>{tr('المستخدمون', 'Users')}</span><strong>{n(o.users.total)}</strong><small>+{n(o.users.last30Days)} {tr('خلال ٣٠ يومًا', '/ 30d')}</small></div>
-    <div className="stat-card"><span>{tr('إيراد 30 يومًا', 'Revenue 30d')}</span><strong>${(o.revenueLast30DaysMinor / 100).toFixed(2)}</strong></div>
+    <div className="stat-card"><span>{tr('إيراد 30 يومًا', 'Revenue 30d')}</span><strong><bdi dir="ltr">${fmtNum(o.revenueLast30DaysMinor / 100, lang, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</bdi></strong></div>
     <div className="stat-card"><span>{tr('طلبات 30 يومًا', 'Requests 30d')}</span><strong>{n(o.usageLast30Days.requests)}</strong><small>{tr('هامش', 'margin')} {usd(margin, 4)}</small></div>
     <div className="stat-card"><span>{tr('أرصدة العملاء', 'Customer credits')}</span><strong>{usd(o.customerCreditsOutstandingMicroUsd)}</strong></div>
     <div className="stat-card"><span>{tr('مفاتيح فعّالة', 'Active keys')}</span><strong>{n(o.activeKeys)}</strong></div>
@@ -207,7 +207,7 @@ function ModelsTab({ tr, fmt }: P) {
   const load = useCallback(() => api<{ defaultMarkupPercent: number; configs: ModelCfg[] }>('/api/admin/models').then(setData).catch(e => setError(errorMessage(e))), []);
   useEffect(() => { load(); }, [load]);
   const save = async (body: { modelId: string; enabled: boolean; markupPercent: number | null; note: string | null }) => { try { await api('/api/admin/models', { method: 'PUT', body }); await load(); } catch (e) { setError(apiMsg(e, tr)); } };
-  return <div className="dash-panel"><h3>{tr('النماذج والتسعير', 'Models & pricing')}</h3><p className="muted">{tr('الهامش الافتراضي', 'Default markup')}: {data?.defaultMarkupPercent ?? '…'}% ({tr('يُضبط بالمتغير', 'set via')} DEFAULT_MARKUP_PERCENT)</p>{error && <p className="live-error">{error}</p>}
+  return <div className="dash-panel"><h3>{tr('النماذج والتسعير', 'Models & pricing')}</h3><p className="muted">{tr('الهامش الافتراضي', 'Default markup')}: {data?.defaultMarkupPercent ?? '…'}% ({tr('يُضبط بالمتغير', 'set via')} <code dir="ltr">DEFAULT_MARKUP_PERCENT</code>)</p>{error && <p className="live-error">{error}</p>}
     <form className="form-row" onSubmit={e => { e.preventDefault(); save({ modelId: form.modelId.trim(), enabled: form.enabled, markupPercent: form.markup === '' ? null : Number(form.markup), note: form.note || null }); setForm({ modelId: '', enabled: true, markup: '', note: '' }); }}>
       <input required placeholder="provider/model-id" value={form.modelId} onChange={e => setForm({ ...form, modelId: e.target.value })} /><input type="number" min={0} max={500} placeholder={tr('هامش %', 'Markup %')} value={form.markup} onChange={e => setForm({ ...form, markup: e.target.value })} /><label className="chk"><input type="checkbox" checked={form.enabled} onChange={e => setForm({ ...form, enabled: e.target.checked })} />{tr('مفعّل', 'Enabled')}</label><input placeholder={tr('ملاحظة', 'Note')} value={form.note} onChange={e => setForm({ ...form, note: e.target.value })} /><button className="button-dark">{tr('حفظ', 'Save')}</button></form>
     <div className="rows">{data?.configs.map(c => <div key={c.modelId}><span><b><bdi dir="ltr">{c.modelId}</bdi></b><small>{c.markupPercent ?? tr('افتراضي', 'default')}% · {c.note || ''} · {fmt(c.updatedAt)}</small></span><button className="pill-link" onClick={() => save({ modelId: c.modelId, enabled: !c.enabled, markupPercent: c.markupPercent, note: c.note })}>{c.enabled ? tr('مفعّل', 'enabled') : tr('معطّل', 'disabled')}</button></div>)}</div></div>;
@@ -258,7 +258,7 @@ function AuditTab({ tr, fmt }: P) {
     </form>
     <p className="muted">{tr('الأوقات بتوقيت جهازك.', 'Times are in your local time.')}</p>
     {error && <p className="live-error" role="alert">{error}</p>}
-    <p role="status" className="muted">{busy ? tr('جارٍ التحميل…', 'Loading…') : tr(`عدد النتائج: ${events.length}`, `Results: ${events.length}`)}</p>
+    <p role="status" className="muted">{busy ? tr('جارٍ التحميل…', 'Loading…') : tr(`عدد النتائج: ${fmtNum(events.length, 'ar')}`, `Results: ${fmtNum(events.length, 'en')}`)}</p>
     {events.length > 0 && <DataTable caption={tr('سجل التدقيق', 'Audit log')} heads={[tr('الإجراء', 'Action'), tr('النتيجة', 'Result'), tr('الوقت', 'Time'), tr('المنفِّذ', 'Actor'), tr('الهدف', 'Target'), 'IP', tr('السبب', 'Reason'), tr('التغيير', 'Change')]}>{events.map(e => <tr key={e.id}><th scope="row"><b><bdi dir="ltr">{e.action}</bdi></b></th><td><span className="role-pill">{resultText(e.result)}</span></td>
       <td>{fmt(e.createdAt)}</td><td><bdi>{e.actorEmail ?? e.actorId ?? '—'}</bdi>{e.actorRole ? <> (<bdi>{e.actorRole}</bdi>)</> : ''}</td><td><bdi>{e.targetType ?? '—'}:{e.targetId ?? '—'}</bdi></td><td>{e.ip ? <bdi>{e.ip}</bdi> : '—'}</td>
       <td>{e.reason ?? '—'}</td>
