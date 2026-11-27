@@ -20,6 +20,11 @@ export function adminEmails(): Set<string> {
   return new Set((env.ADMIN_EMAILS || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean));
 }
 
+/** Off unless exactly "true". Lets ADMIN_EMAILS grant `admin` (never super_admin) even after a super_admin exists. Every use is audited and needs MFA. */
+export function adminEmailsBreakGlass(): boolean {
+  return env.ADMIN_EMAILS_BREAKGLASS === 'true';
+}
+
 export function defaultMarkupPercent(): number {
   const n = Number(env.DEFAULT_MARKUP_PERCENT);
   return Number.isFinite(n) && n >= 0 && n <= 500 ? n : 20;

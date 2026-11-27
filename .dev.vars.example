@@ -8,6 +8,8 @@ APP_ENV=development
 PUBLIC_BASE_URL=http://127.0.0.1:5173
 # Comma separated. These accounts become admins once their email is verified.
 ADMIN_EMAILS=admin@example.com
+# Off unless "true": lets ADMIN_EMAILS grant admin even after a super_admin exists (MFA required, every use audited).
+# ADMIN_EMAILS_BREAKGLASS=true
 
 # Paid inference gateway (/api/v1/chat/completions). Both are required to enable it.
 INFERENCE_ENABLED=false
