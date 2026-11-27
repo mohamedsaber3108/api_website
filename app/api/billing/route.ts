@@ -32,5 +32,5 @@ export const GET = handle(async request => {
       .orderBy(desc(invoices.issuedAt))
       .limit(20),
   ]);
-  return json({ balanceMicroUsd: summary.balanceMicroUsd, heldMicroUsd: summary.heldMicroUsd, availableMicroUsd: summary.availableMicroUsd, packages: CREDIT_PACKAGES, checkoutEnabled: features.billing(), emailVerified: user.emailVerified, transactions, payments: paymentRows, invoices: invoiceRows });
+  return json({ balanceMicroUsd: summary.balanceMicroUsd, heldMicroUsd: summary.heldMicroUsd, availableMicroUsd: summary.availableMicroUsd, packages: CREDIT_PACKAGES, checkoutEnabled: features.billing(), inferenceEnabled: features.inference(), emailVerified: user.emailVerified, transactions, payments: paymentRows, invoices: invoiceRows });
 });

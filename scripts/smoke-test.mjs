@@ -179,7 +179,16 @@ if (who.json.user?.role === 'admin') {
   const inc = await a('/api/admin/incidents', { method: 'POST', body: { title: 'Smoke incident', body: 'Testing incidents', severity: 'minor' } });
   check('incident created', inc.status === 201);
   check('incident resolved', (await a('/api/admin/incidents', { method: 'PATCH', body: { id: inc.json.id, status: 'resolved' } })).status === 200);
-  check('audit log', (await a('/api/admin/audit?limit=5')).json.events?.length > 0);
+  // AUD-1: the audit log is for super_admin only. ADMIN_EMAILS never grants super_admin, so an admin gets 403.
+  check('admin (not super_admin) cannot read the audit log', (await a('/api/admin/audit?limit=5')).status === 403);
+  // Optional: SMOKE_SQLITE=<path to the LOCAL scratch D1 file> promotes this admin to super_admin there (role is read on every request).
+  if (process.env.SMOKE_SQLITE) {
+    const { DatabaseSync } = await import('node:sqlite');
+    const db = new DatabaseSync(process.env.SMOKE_SQLITE);
+    db.prepare("UPDATE accounts SET role = 'super_admin' WHERE email = ?").run(adminEmail.toLowerCase());
+    db.close();
+    check('super_admin reads the audit log', (await a('/api/admin/audit?limit=5')).json.events?.length > 0);
+  }
   check('admin cannot demote self', (await a(`/api/admin/users/${who.json.user.id}`, { method: 'PATCH', body: { role: 'customer' } })).status === 400);
   check('suspend user', (await a(`/api/admin/users/${target.id}`, { method: 'PATCH', body: { status: 'suspended' } })).status === 200);
   check('suspended user signed out', (await u('/api/account')).status === 401);

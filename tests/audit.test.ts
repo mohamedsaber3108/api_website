@@ -121,7 +121,7 @@ describe('denied attempts are written', () => {
   it('support, customer and an admin without MFA are refused on admin routes and each leaves a denied row', async () => {
     const support = await makeUser({ role: 'support' });
     const customer = await makeUser();
-    const noMfa = await makeUser({ role: 'admin', mfaVerifiedAt: null });
+    const noMfa = await makeUser({ role: 'super_admin', mfaVerifiedAt: null });
     for (const u of [support, customer]) expect((await call(models.PUT, req('/api/admin/models', { method: 'PUT', cookie: u.cookie, body: { modelId: 'x/y', enabled: true, markupPercent: 5 } }))).status).toBe(403);
     expect((await call(audit.GET, req('/api/admin/audit', { cookie: noMfa.cookie }))).status).toBe(403);
     const denied = await byAction('auth.admin_denied');
@@ -314,7 +314,7 @@ describe('fix round 1 (review of PR 7)', () => {
 
 describe('viewer filters', () => {
   it('filters by actor (id and e-mail), action, target, result and date; shows actor e-mail; old rows still load', async () => {
-    const admin = await makeUser({ role: 'admin' });
+    const admin = await makeUser({ role: 'super_admin' });
     const other = await makeUser({ role: 'support' });
     await writeAudit(null, other.userId, 'filter.alpha', { type: 'widget', id: 'w-1' }, undefined, { result: 'denied', reason: 'because' });
     await writeAudit(null, other.userId, 'filter.beta', { type: 'gadget', id: 'g-9' });
@@ -331,6 +331,91 @@ describe('viewer filters', () => {
     expect((await feed(admin.cookie, `?actor=${other.userId}&to=${now - 60_000}`)).length).toBe(0);
     expect((await feed(admin.cookie, `?actor=${other.userId}&from=${now - 60_000}&to=${now + 60_000}`)).length).toBe(2);
     expect((await feed(admin.cookie, '?action=old.row')).map(e => e.id)).toEqual(['legacy-1']); // a row from before the chain still loads
+  });
+});
+
+describe('AUD-1: viewer is super_admin only', () => {
+  it('admin, support and customer get 403 (and a denied row); super_admin gets 200', async () => {
+    const admin = await makeUser({ role: 'admin' });
+    const support = await makeUser({ role: 'support' });
+    const customer = await makeUser();
+    const sup = await makeUser({ role: 'super_admin' });
+    for (const u of [admin, support, customer]) {
+      const res = await call(audit.GET, req('/api/admin/audit', { cookie: u.cookie }));
+      expect(res.status).toBe(403);
+      expect((await res.json()).code).toBe('forbidden');
+    }
+    expect((await call(audit.GET, req('/api/admin/audit'))).status).toBe(401);
+    expect((await call(audit.GET, req('/api/admin/audit', { cookie: sup.cookie }))).status).toBe(200);
+    const denied = await byAction('auth.admin_denied');
+    for (const [u, role] of [[admin, 'admin'], [support, 'support'], [customer, 'customer']] as const) {
+      expect(denied.filter(r => r.actorId === u.userId)).toEqual([expect.objectContaining({ result: 'denied', reason: 'role_not_allowed', actorRole: role, targetId: '/api/admin/audit' })]);
+    }
+    expect(denied.filter(r => r.actorId === sup.userId)).toHaveLength(0);
+    // throttled like PR 7: a second refusal in the window writes no second row
+    await call(audit.GET, req('/api/admin/audit', { cookie: admin.cookie }));
+    expect((await byAction('auth.admin_denied')).filter(r => r.actorId === admin.userId)).toHaveLength(1);
+  });
+});
+
+describe('AUD-1: scripts/verify-audit-daily.mjs', () => {
+  const script = path.resolve(__dirname, '../scripts/verify-audit-daily.mjs');
+  const makeCopy = async (dir: string) => {
+    const file = path.join(dir, 'copy.sqlite');
+    const db = new DatabaseSync(file);
+    db.exec('CREATE TABLE audit_logs (id text primary key, actor_id text, action text not null, target_type text, target_id text, meta text, ip text, created_at integer not null, seq integer, prev_hash text, hash text, actor_role text, `before` text, `after` text, reason text, result text)');
+    const ins = db.prepare('INSERT INTO audit_logs (id, actor_id, action, created_at, seq, prev_hash, hash, result) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+    let prev = GENESIS;
+    for (let seq = 1; seq <= 3; seq++) {
+      const f = { seq, id: `d${seq}`, actorId: 'u1', actorRole: null, action: 'x.y', targetType: null, targetId: null, meta: null, before: null, after: null, reason: null, result: 'success', ip: null, createdAt: 3000 + seq, prevHash: prev };
+      const hash = await chainHash(f);
+      ins.run(f.id, 'u1', 'x.y', f.createdAt, seq, prev, hash, 'success');
+      prev = hash;
+    }
+    db.close();
+    return file;
+  };
+  const run = (dir: string, args: string[], env: Record<string, string> = {}) =>
+    spawnSync('node', ['--no-warnings', script, ...args], { encoding: 'utf8', env: { PATH: process.env.PATH ?? '', ...env } as unknown as NodeJS.ProcessEnv });
+
+  it('exits 0 on an intact copy and does not call the hook; exits 1 and calls the stub hook on a tampered copy; the copy is not changed', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'audit-daily-'));
+    const file = await makeCopy(dir);
+    const marker = path.join(dir, 'alert.marker');
+    const hook = path.join(dir, 'hook.sh');
+    writeFileSync(hook, `#!/bin/sh\necho "$AUDIT_ALERT_STATUS|$AUDIT_ALERT_MESSAGE" > "${marker}"\n`, { mode: 0o755 });
+    const env = { AUDIT_ALERT_COMMAND: hook };
+    const before = readFileSync(file);
+    const ok = run(dir, [file], env);
+    expect(ok.status).toBe(0);
+    expect(ok.stdout).toContain('OK: 3 chained rows intact');
+    expect(() => readFileSync(marker)).toThrow();
+    expect(readFileSync(file).equals(before)).toBe(true); // read-only: byte-identical
+    const w = new DatabaseSync(file);
+    w.exec("UPDATE audit_logs SET action = 'x.edited' WHERE seq = 2");
+    w.close();
+    const bad = run(dir, [file], env);
+    expect(bad.status).toBe(1);
+    expect(bad.stderr).toContain('BROKEN at seq 2');
+    expect(readFileSync(marker, 'utf8')).toContain('broken|BROKEN at seq 2');
+  });
+
+  it('a missing file or missing path is a failure (exit 2) that calls the hook; with no hook it only prints; a failing hook gives exit 3', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'audit-daily-'));
+    const marker = path.join(dir, 'alert.marker');
+    const hook = path.join(dir, 'hook.sh');
+    writeFileSync(hook, `#!/bin/sh\necho "$AUDIT_ALERT_STATUS" > "${marker}"\n`, { mode: 0o755 });
+    const missing = run(dir, [path.join(dir, 'nope.sqlite')], { AUDIT_ALERT_COMMAND: hook });
+    expect(missing.status).toBe(2);
+    expect(readFileSync(marker, 'utf8').trim()).toBe('failed');
+    const off = run(dir, [], {});
+    expect(off.status).toBe(2);
+    expect(off.stderr).toContain('alert is OFF');
+    expect(run(dir, [path.join(dir, 'nope.sqlite')], { AUDIT_ALERT_COMMAND: path.join(dir, 'not-there.sh') }).status).toBe(3);
+    // a non-https webhook is refused before any network call
+    const http = run(dir, [path.join(dir, 'nope.sqlite')], { AUDIT_ALERT_WEBHOOK_URL: 'http://127.0.0.1:9/x' });
+    expect(http.status).toBe(3);
+    expect(http.stderr).toContain('must start with https://');
   });
 });
 

@@ -3,6 +3,7 @@ import { env } from 'cloudflare:workers';
 import { eq } from 'drizzle-orm';
 import { getDb } from '../db';
 import { payments, paymentWebhookEvents, invoices } from '../db/schema';
+import { INFERENCE_OFF_MESSAGE } from '../lib/checkout-error';
 import { hmacSha256Hex } from '../lib/server/crypto';
 import { getBalanceMicroUsd } from '../lib/server/ledger';
 import { verifyStripeSignature } from '../lib/server/stripe';
@@ -21,8 +22,10 @@ beforeEach(() => {
   vi.stubGlobal('fetch', fetchSpy);
   env.STRIPE_SECRET_KEY = 'sk_test_not_a_real_key';
   env.STRIPE_WEBHOOK_SECRET = SECRET;
+  env.INFERENCE_ENABLED = 'true';
+  env.OPENROUTER_API_KEY = 'or_test_not_a_real_key';
 });
-afterEach(() => { vi.unstubAllGlobals(); delete env.STRIPE_SECRET_KEY; delete env.STRIPE_WEBHOOK_SECRET; delete env.INFERENCE_ENABLED; });
+afterEach(() => { vi.unstubAllGlobals(); delete env.STRIPE_SECRET_KEY; delete env.STRIPE_WEBHOOK_SECRET; delete env.INFERENCE_ENABLED; delete env.OPENROUTER_API_KEY; });
 
 async function sign(raw: string, t = Math.floor(Date.now() / 1000), secret = SECRET) {
   return `t=${t},v1=${await hmacSha256Hex(secret, `${t}.${raw}`)}`;
@@ -231,13 +234,36 @@ describe('checkout', () => {
     const rows = await getDb().select().from(payments).where(eq(payments.userId, u.userId));
     expect(rows.map(r => r.status)).toEqual(['failed']);
   });
-  it('FINDING: with INFERENCE_ENABLED=false checkout still starts a real Stripe charge flow', async () => {
-    // Report only (task rule: do not fix in this PR). If this test starts failing, the guard was added: update it.
+  const blocked = async () => {
+    stripeOk();
+    const u = await makeUser();
+    const res = await call(u, { amountUsd: 10 });
+    expect(res.status).toBe(503);
+    const body = await res.json();
+    expect(body.code).toBe('inference_not_enabled');
+    expect(body.error).toBe(INFERENCE_OFF_MESSAGE.en);
+    expect(body.message_ar).toBe(INFERENCE_OFF_MESSAGE.ar);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(await getDb().select().from(payments).where(eq(payments.userId, u.userId))).toEqual([]);
+  };
+  it('INFERENCE_ENABLED=false: 503 inference_not_enabled, no Stripe call, no payment row', async () => {
     env.INFERENCE_ENABLED = 'false';
+    await blocked();
+  });
+  it('inference flag true but no provider key: 503 inference_not_enabled, no payment row', async () => {
+    delete env.OPENROUTER_API_KEY;
+    await blocked();
+  });
+  it('inference on (flag and provider key set): checkout is created as before', async () => {
     stripeOk();
     const res = await call(await makeUser(), { amountUsd: 10 });
     expect(res.status).toBe(201);
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
     expect(String(fetchSpy.mock.calls[0][0])).toBe('https://api.stripe.com/v1/checkout/sessions');
+  });
+  it('inference off does not stop the webhook crediting an older pending payment', async () => {
+    env.INFERENCE_ENABLED = 'false';
+    const { u, id } = await pendingPayment();
+    expect((await post(completed('evt_sec9_old', id))).status).toBe(200);
+    expect(await getBalanceMicroUsd(u.userId)).toBe(10_000_000);
   });
 });

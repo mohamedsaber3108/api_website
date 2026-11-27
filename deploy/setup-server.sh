@@ -136,7 +136,10 @@ cat > /etc/caddy/Caddyfile <<'EOF'
 	header {
 		X-Content-Type-Options nosniff
 		Referrer-Policy strict-origin-when-cross-origin
-		X-Frame-Options SAMEORIGIN
+		X-Frame-Options DENY
+		# The CSP is sent only by the app (lib/server/security-headers.ts), so there is one copy.
+		# HSTS: add ONLY after the site is served over HTTPS (SEC-5a, blocked on the domain). The app
+		# already sends it when a request is HTTPS, so it is not repeated here.
 		-Server
 	}
 	log {
