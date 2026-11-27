@@ -92,14 +92,14 @@ put() {  # subfolder, local file, name
       ssh -o BatchMode=yes -o StrictHostKeyChecking=yes ${OFFBOX_SSH_KEY:+-i "$OFFBOX_SSH_KEY"} "$RHOST" "mkdir -p -- '$RBASE/$1'" 2>/dev/null || return 1
       rsync -t --chmod=F600 -e "$RSH" -- "$2" "$RHOST:$RBASE/$1/$3" 2>/dev/null ;;
     s3) aws s3 cp --only-show-errors "$2" "$RBASE/$1/$3" 2>/dev/null ;;
-    rclone) rclone copyto "$2" "$RBASE/$1/$3" ;;
+    rclone) rclone copyto "$2" "$RBASE/$1/$3" 2>/dev/null ;;
   esac
 }
 get() {  # subfolder, name -> stdout
   case "$KIND" in
     ssh) ssh -o BatchMode=yes -o StrictHostKeyChecking=yes ${OFFBOX_SSH_KEY:+-i "$OFFBOX_SSH_KEY"} "$RHOST" "cat -- '$RBASE/$1/$2'" 2>/dev/null ;;
     s3) aws s3 cp --only-show-errors "$RBASE/$1/$2" - 2>/dev/null ;;
-    rclone) rclone cat "$RBASE/$1/$2" ;;
+    rclone) rclone cat "$RBASE/$1/$2" 2>/dev/null ;;
   esac
 }
 
