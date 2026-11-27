@@ -66,7 +66,7 @@ export async function usageSummary(userId: string | null, days: number, cap = BY
     : [];
   const byDayModelTruncated = dayModelRows.length > cap;
   const byDayModel = byDayModelTruncated ? dayModelRows.slice(0, cap) : dayModelRows;
-  return { days, daily, byModel, byDayModel, byDayModelTruncated, totals };
+  return { days, daily, byModel, byDayModel, byDayModelTruncated, byDayModelLimit: cap, totals };
 }
 
 export function csvEscape(v: unknown): string {

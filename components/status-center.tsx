@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { Activity, ArrowUpRight } from 'lucide-react';
+import { openIncidentsHeadline } from '../lib/status-headline';
 
 type Lang = 'ar' | 'en';
 type Incident = { id: string; title: string; body: string; status: string; severity: string; createdAt: number; resolvedAt: number | null; open?: boolean };
@@ -53,9 +54,7 @@ export function StatusCenter({ lang }: { lang: Lang }) {
     ? (ar ? 'تشغيل جزئي أو تعذّر الفحص' : 'Partial disruption or check failed')
     : !report
       ? (ar ? 'جارٍ التحقق' : 'Checking')
-      : open.length > 0
-        ? (ar ? 'كل الأنظمة تعمل، ويوجد حادث مفتوح' : 'Systems working, one incident is open')
-        : (ar ? 'كل الأنظمة تعمل' : 'All systems operational');
+      : openIncidentsHeadline(open.length, lang);
   const rows: [keyof Report['checks'], string][] = [
     ['database', ar ? 'قاعدة البيانات' : 'Database'],
     ['inference', ar ? 'استدلال وصل (مفتاح التشغيل)' : 'Wasl inference (switch)'],
@@ -67,7 +66,7 @@ export function StatusCenter({ lang }: { lang: Lang }) {
   return (
     <main className="inner-page">
       <section className="page-heading section">
-        <span className="section-kicker">WASL / STATUS</span>
+        <span className="section-kicker" lang="en">WASL / STATUS</span>
         <h1>{ar ? 'حالة مكوّنات وصل.' : 'Wasl service status.'}</h1>
         <p>{ar ? 'فحص مباشر لقاعدة البيانات والخدمات، مع سجل الحوادث.' : 'Live checks of the database and services, with incident history.'}</p>
         <div className="page-heading-art"><Activity /></div>
