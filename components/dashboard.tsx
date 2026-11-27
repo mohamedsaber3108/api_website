@@ -3,13 +3,14 @@ import { useCallback, useEffect, useState } from 'react';
 import { BarChart3, CreditCard, Download, KeyRound, LifeBuoy, LockKeyhole, Plus, RefreshCw, Settings, Trash2, Wallet, Zap, Copy, Receipt } from 'lucide-react';
 import { api, ApiError, errorMessage, usd, type SessionInfo } from '../lib/client-api';
 import { inferenceOffMessage } from '../lib/checkout-error';
+import SpendLimits from './spend-limits';
 
 type Lang = 'ar' | 'en';
 type Tab = 'overview' | 'keys' | 'usage' | 'billing' | 'support' | 'settings';
 type Key = { id: string; name: string; prefix: string; scopes: string; createdAt: number; lastUsedAt: number | null; expiresAt: number | null; rateLimitPerMin: number };
 type UsageRow = { id: string; model: string; inputTokens: number; outputTokens: number; costMicroUsd: number; createdAt: number; status: string; source: string };
 type Account = { account: { email: string; name: string; role: string; provider: string; emailVerified: boolean; preferences: Record<string, string> }; balanceMicroUsd: number; heldMicroUsd: number; availableMicroUsd: number; month: { requests: number; costMicroUsd: number; tokens: number }; keys: Key[]; usage: UsageRow[]; service: { inference: boolean; checkout: boolean } };
-type Summary = { days: number; daily: { day: string; requests: number; tokens: number; costMicroUsd: number }[]; byModel: { model: string; requests: number; inputTokens: number; outputTokens: number; costMicroUsd: number }[]; totals: { requests: number; errors: number; costMicroUsd: number } | undefined };
+type Summary = { days: number; daily: { day: string; requests: number; tokens: number; costMicroUsd: number }[]; byModel: { model: string; requests: number; inputTokens: number; outputTokens: number; costMicroUsd: number }[]; byDayModel?: { day: string; model: string; requests: number; costMicroUsd: number }[]; totals: { requests: number; errors: number; costMicroUsd: number } | undefined };
 type Billing = { balanceMicroUsd: number; heldMicroUsd: number; availableMicroUsd: number; packages: number[]; checkoutEnabled: boolean; inferenceEnabled?: boolean; emailVerified: boolean; transactions: { id: string; deltaMicroUsd: number; type: string; note: string | null; createdAt: number }[]; payments: { id: string; amountMinor: number; status: string; createdAt: number }[]; invoices: { id: string; number: string; amountMinor: number; currency: string; description: string; issuedAt: number }[] };
 type Ticket = { id: string; subject: string; status: string; createdAt: number; updatedAt: number | null };
 type Msg = { id: string; authorRole: string; authorName: string; body: string; createdAt: number };
@@ -54,7 +55,7 @@ export default function Dashboard({ lang, session, refreshSession, go }: { lang:
     {!data ? <p className="muted">{tr('جارٍ التحميل…', 'Loading…')}</p> : <>
       {tab === 'overview' && <Overview ar={ar} data={data} fmt={fmt} setTab={setTab} />}
       {tab === 'keys' && <Keys ar={ar} keys={data.keys} fmt={fmt} reload={load} inference={data.service.inference} />}
-      {tab === 'usage' && <UsageTab ar={ar} />}
+      {tab === 'usage' && <UsageTab ar={ar} data={data} />}
       {tab === 'billing' && <BillingTab ar={ar} fmt={fmt} />}
       {tab === 'support' && <SupportTab ar={ar} fmt={fmt} />}
       {tab === 'settings' && <SettingsTab ar={ar} data={data} fmt={fmt} reload={load} refreshSession={refreshSession} go={go} setNotice={setNotice} />}
@@ -126,17 +127,19 @@ function Keys({ ar, keys, fmt, reload, inference }: { ar: boolean; keys: Key[]; 
       <span className="row-actions"><button aria-label={tr('تدوير', 'Rotate')} title={tr('تدوير', 'Rotate')} onClick={() => rotate(k.id)}><RefreshCw size={17} /></button><button aria-label={tr('إلغاء', 'Revoke')} title={tr('إلغاء', 'Revoke')} onClick={() => revoke(k.id)}><Trash2 size={17} /></button></span></div>)}</div></div>;
 }
 
-function UsageTab({ ar }: { ar: boolean }) {
+function UsageTab({ ar, data }: { ar: boolean; data: Account }) {
   const tr = (a: string, e: string) => (ar ? a : e);
   const [days, setDays] = useState(30);
   const [s, setS] = useState<Summary | null>(null);
   const [error, setError] = useState('');
   useEffect(() => { api<Summary>(`/api/account/usage?days=${days}`).then(setS).catch(e => setError(errorMessage(e))); }, [days]);
-  return <div className="dash-panel"><div className="panel-head"><h3>{tr('الاستخدام', 'Usage')}</h3><div className="form-row"><select value={days} onChange={e => setDays(Number(e.target.value))}>{[7, 30, 90].map(d => <option key={d} value={d}>{d} {tr('يومًا', 'days')}</option>)}</select><a className="pill-link" href={`/api/account/usage/export?days=${days}`}><Download size={15} /> CSV</a></div></div>
+  return <><div className="dash-panel"><p className="muted"><BalanceLine ar={ar} balance={data.balanceMicroUsd} held={data.heldMicroUsd} available={data.availableMicroUsd} digits={4} /></p><div className="panel-head"><h3>{tr('الاستخدام', 'Usage')}</h3><div className="form-row"><select value={days} onChange={e => setDays(Number(e.target.value))}>{[7, 30, 90].map(d => <option key={d} value={d}>{d} {tr('يومًا', 'days')}</option>)}</select><a className="pill-link" href={`/api/account/usage/export?days=${days}`}><Download size={15} /> CSV</a></div></div>
     {error && <p className="live-error">{error}</p>}
     {s && <><div className="stat-grid four"><div className="stat-card"><span>{tr('الطلبات', 'Requests')}</span><strong>{(s.totals?.requests ?? 0).toLocaleString()}</strong></div><div className="stat-card"><span>{tr('الإنفاق', 'Spend')}</span><strong>{usd(s.totals?.costMicroUsd ?? 0, 4)}</strong></div><div className="stat-card"><span>{tr('أخطاء', 'Errors')}</span><strong>{s.totals?.errors ?? 0}</strong></div></div>
-      <Bars label="spend per day" data={s.daily.map(d => ({ day: d.day, value: d.costMicroUsd }))} />
-      <h3>{tr('حسب النموذج', 'By model')}</h3><div className="rows">{s.byModel.length === 0 ? <p className="muted">—</p> : s.byModel.map(m => <div key={m.model}><span><b>{m.model}</b><small>{m.requests} {tr('طلب', 'requests')} · {m.inputTokens.toLocaleString()} in / {m.outputTokens.toLocaleString()} out</small></span><strong>{usd(m.costMicroUsd, 4)}</strong></div>)}</div></>}</div>;
+      <Bars label={tr('الإنفاق اليومي. الجدول أدناه يحمل الأرقام نفسها.', 'Spend per day. The table below has the same numbers.')} data={s.daily.map(d => ({ day: d.day, value: d.costMicroUsd }))} />
+      <details><summary>{tr('عرض الجدول اليومي', 'Show daily table')}</summary><table style={{ width: '100%' }}><caption>{tr('الاستخدام حسب اليوم', 'Usage by day')}</caption><thead><tr><th scope="col">{tr('اليوم', 'Day')}</th><th scope="col">{tr('الطلبات', 'Requests')}</th><th scope="col">{tr('الرموز', 'Tokens')}</th><th scope="col">{tr('الإنفاق', 'Spend')}</th></tr></thead><tbody>{s.daily.map(d => <tr key={d.day}><th scope="row"><bdi dir="ltr">{d.day}</bdi></th><td><bdi dir="ltr">{d.requests.toLocaleString()}</bdi></td><td><bdi dir="ltr">{d.tokens.toLocaleString()}</bdi></td><td><bdi dir="ltr">{usd(d.costMicroUsd, 4)}</bdi></td></tr>)}</tbody></table></details>
+      <h3>{tr('حسب النموذج', 'By model')}</h3><div className="rows">{s.byModel.length === 0 ? <p className="muted">—</p> : s.byModel.map(m => <div key={m.model}><span><b>{m.model}</b><small>{m.requests} {tr('طلب', 'requests')} · {m.inputTokens.toLocaleString()} in / {m.outputTokens.toLocaleString()} out</small></span><strong><bdi dir="ltr">{usd(m.costMicroUsd, 4)}</bdi></strong></div>)}</div>
+      <details><summary>{tr('عرض الجدول حسب اليوم والنموذج', 'Show day by model table')}</summary><table style={{ width: '100%' }}><caption>{tr('الاستخدام حسب اليوم والنموذج', 'Usage by day and model')}</caption><thead><tr><th scope="col">{tr('اليوم', 'Day')}</th><th scope="col">{tr('النموذج', 'Model')}</th><th scope="col">{tr('الطلبات', 'Requests')}</th><th scope="col">{tr('الإنفاق', 'Spend')}</th></tr></thead><tbody>{(s.byDayModel ?? []).map(r => <tr key={`${r.day}|${r.model}`}><th scope="row"><bdi dir="ltr">{r.day}</bdi></th><td><bdi dir="ltr">{r.model}</bdi></td><td><bdi dir="ltr">{r.requests.toLocaleString()}</bdi></td><td><bdi dir="ltr">{usd(r.costMicroUsd, 4)}</bdi></td></tr>)}</tbody></table></details></>}</div><SpendLimits ar={ar} /></>;
 }
 
 function BillingTab({ ar, fmt }: { ar: boolean; fmt: (t: number) => string }) {
