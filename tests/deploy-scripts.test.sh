@@ -74,6 +74,9 @@ fresh 'DROP TABLE `a`;'
 printf '0000_init.sql\n0001_more.sql\n' > "$T/applied.txt"
 run rb; check "target knows every applied migration: exits 0 even if 0002 is unsafe" "$RC"
 
+src="$(cat "$ROOT/deploy/rollback-db.sh")"
+[[ "$src" == *'mv -Tf "$tmp" "$APP_ROOT/current"'* ]]; check "symlink switch uses an atomic rename" "$?"
+
 run rb --bogus; [[ "$RC" -eq 2 ]]; check "unknown option exits 2" "$?"
 
 # ---- offbox-backup.sh ----

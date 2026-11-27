@@ -17,6 +17,7 @@ ExecStart=/usr/bin/bash /opt/wasl/current/deploy/offbox-backup.sh
 PrivateTmp=yes
 NoNewPrivileges=yes
 ProtectSystem=strict
-ProtectHome=yes
+# read-only, not yes: ssh must read ~/.ssh/known_hosts and the key file.
+ProtectHome=read-only
 # Read only: this unit never changes the local backups.
 ReadOnlyPaths=/var/backups/wasl

@@ -85,19 +85,20 @@ for f in "${audit[@]}"; do jobs+=("audit|$AUDIT_EXPORT_DIR/$f|$f"); done
 
 if [[ "${#jobs[@]}" -eq 0 ]]; then log "no backup or audit files found to copy"; exit 0; fi
 
+# Tool errors go to /dev/null: ssh, rsync and aws print the host or bucket in their messages. Callers report a generic failure.
 put() {  # subfolder, local file, name
   case "$KIND" in
     ssh)
-      ssh -o BatchMode=yes -o StrictHostKeyChecking=yes ${OFFBOX_SSH_KEY:+-i "$OFFBOX_SSH_KEY"} "$RHOST" "mkdir -p -- '$RBASE/$1'"
-      rsync -t --chmod=F600 -e "$RSH" -- "$2" "$RHOST:$RBASE/$1/$3" ;;
-    s3) aws s3 cp --only-show-errors "$2" "$RBASE/$1/$3" ;;
+      ssh -o BatchMode=yes -o StrictHostKeyChecking=yes ${OFFBOX_SSH_KEY:+-i "$OFFBOX_SSH_KEY"} "$RHOST" "mkdir -p -- '$RBASE/$1'" 2>/dev/null || return 1
+      rsync -t --chmod=F600 -e "$RSH" -- "$2" "$RHOST:$RBASE/$1/$3" 2>/dev/null ;;
+    s3) aws s3 cp --only-show-errors "$2" "$RBASE/$1/$3" 2>/dev/null ;;
     rclone) rclone copyto "$2" "$RBASE/$1/$3" ;;
   esac
 }
 get() {  # subfolder, name -> stdout
   case "$KIND" in
-    ssh) ssh -o BatchMode=yes -o StrictHostKeyChecking=yes ${OFFBOX_SSH_KEY:+-i "$OFFBOX_SSH_KEY"} "$RHOST" "cat -- '$RBASE/$1/$2'" ;;
-    s3) aws s3 cp --only-show-errors "$RBASE/$1/$2" - ;;
+    ssh) ssh -o BatchMode=yes -o StrictHostKeyChecking=yes ${OFFBOX_SSH_KEY:+-i "$OFFBOX_SSH_KEY"} "$RHOST" "cat -- '$RBASE/$1/$2'" 2>/dev/null ;;
+    s3) aws s3 cp --only-show-errors "$RBASE/$1/$2" - 2>/dev/null ;;
     rclone) rclone cat "$RBASE/$1/$2" ;;
   esac
 }

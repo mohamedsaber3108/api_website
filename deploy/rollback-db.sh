@@ -150,10 +150,18 @@ find_sql() {
 ADDITIVE_RE='^(create (unique )?index |create table |alter table [^ ]+ add |insert (or ignore )?into )'
 blocked=()
 
+# Atomic switch: make the new link beside the old one, then rename it over "current" (rename is atomic, ln -sfn is not).
+switch_current() {
+  local tmp="$APP_ROOT/.current.tmp.$$"
+  ln -sfn "$1" "$tmp"
+  mv -Tf "$tmp" "$APP_ROOT/current"
+}
+
 check_file() {
   local name="$1" f="$2" text stmt s
-  # Drop "--" comments (this includes drizzle's "--> statement-breakpoint") and /* */ comments.
-  text="$(sed -e 's/--.*$//' "$f" | tr '\n\t' '  ' | sed -e 's:/\*[^*]*\*/: :g')"
+  # Drop drizzle's "--> statement-breakpoint", whole-line "--" comments and /* */ comments. An inline "--" is kept on purpose:
+  # text after it is then checked too, so a DROP hidden behind a string with "--" in it is refused, not skipped.
+  text="$(sed -e 's/--> statement-breakpoint//g' -e 's/^[[:space:]]*--.*$//' "$f" | tr '\n\t' '  ' | sed -e 's:/\*[^*]*\*/: :g')"
   while IFS= read -r -d ';' stmt || [[ -n "$stmt" ]]; do
     s="$(printf '%s' "$stmt" | tr -d '`"[]' | tr 'A-Z' 'a-z' | tr -s ' ' | sed -e 's/^ //' -e 's/ $//')"
     [[ -n "$s" ]] || continue
@@ -211,14 +219,14 @@ for db in "${DBS[@]}"; do
 done
 
 log "pointing current at $TARGET"
-ln -sfn "$TARGET" "$APP_ROOT/current"
+switch_current "$TARGET"
 systemctl restart "$SERVICE"
 if health; then
   log "rolled back code to $(basename "$TARGET"); additive schema left in place"
   exit 0
 fi
 log "target release is unhealthy; putting the old release back" >&2
-ln -sfn "$CURRENT" "$APP_ROOT/current"
+switch_current "$CURRENT"
 systemctl restart "$SERVICE"
 if health; then die "rollback failed its health check; old release restored. See: journalctl -u $SERVICE"; fi
 die "both releases unhealthy. See: journalctl -u $SERVICE. Backups are in $BACKUP_DIR"
