@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { GET as openapiGet } from '../app/api/v1/openapi.json/route';
-import { ENDPOINT_IDS, ENDPOINTS, ERROR_CODES, KEY_PLACEHOLDER, ONBOARDING, SAMPLE_LANGS, requestBody, sample } from '../lib/docs-samples';
+import { ENDPOINT_IDS, ENDPOINTS, ERROR_CODES, ERROR_NOTES, KEY_PLACEHOLDER, ONBOARDING, SAMPLE_LANGS, requestBody, sample } from '../lib/docs-samples';
 
 type Op = { security?: unknown[]; description?: string; parameters?: { name: string; in: string }[]; responses: Record<string, Record<string, unknown>> };
 type Spec = { paths: Record<string, Record<string, Op>>; components: { schemas: { ChatRequest: { required: string[]; properties: Record<string, unknown> } } } };
@@ -108,6 +108,35 @@ describe('FEAT-1 error codes', () => {
   it('Arabic texts have no Latin letters (so no bidi mixing)', () => {
     for (const c of ERROR_CODES) expect(c.ar, c.code).not.toMatch(/[A-Za-z]/);
     for (const s of ONBOARDING) expect([s.ar, s.arTail ?? ''].join(' '), s.id).not.toMatch(/[A-Za-z]/);
+  });
+});
+
+describe('FU-23 provider passthrough, fallback code and 402 fields', () => {
+  it('upstream_error is documented for the passed-through 4xx statuses and for 502, in OpenAPI too', () => {
+    const statuses = ERROR_CODES.filter(c => c.code === 'upstream_error').map(c => c.status);
+    expect(statuses).toEqual(expect.arrayContaining([400, 403, 404, 413, 422, 502]));
+    const chat = spec.paths['/chat/completions'].post.responses;
+    for (const s of [400, 403, 404, 413, 422, 502]) expect(chat[String(s)]['x-error-codes'], String(s)).toContain('upstream_error');
+  });
+  it('the gateway really passes the provider status through and has the fallback code', () => {
+    const gw = read('lib/server/gateway.ts');
+    expect(gw).toContain("status === 429 ? 'provider_rate_limited' : 'upstream_error'");
+    expect(gw).toContain("e.code ?? 'error'");
+  });
+  it('the notes name upstream_error and the fallback code error, and their Arabic has no Latin letters', () => {
+    const codes = ERROR_NOTES.flatMap(n => n.codes ?? []);
+    expect(codes).toEqual(expect.arrayContaining(['upstream_error', 'error']));
+    for (const n of ERROR_NOTES) expect(n.ar, n.id).not.toMatch(/[A-Za-z]/);
+  });
+  it('the 402 extra fields are documented, sent by the gateway, and in the OpenAPI Error schema', () => {
+    const gw = read('lib/server/gateway.ts');
+    const fields = (code: string) => ERROR_CODES.find(c => c.code === code)?.extra ?? [];
+    expect(fields('insufficient_credits')).toEqual(['need_micro_usd', 'available_micro_usd']);
+    expect(fields('spend_limit_reached')).toEqual(['limit_micro_usd', 'used_micro_usd', 'limit_is_key']);
+    const all = [...fields('insufficient_credits'), ...fields('spend_limit_reached')];
+    const schema = (spec.components.schemas as unknown as { Error: { properties: { error: { properties: Record<string, unknown> } } } }).Error.properties.error.properties;
+    for (const f of all) { expect(gw, f).toContain(f); expect(Object.keys(schema), f).toContain(f); }
+    expect(ERROR_NOTES.find(n => n.id === 'fields-402')?.codes).toEqual(all);
   });
 });
 

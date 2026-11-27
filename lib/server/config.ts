@@ -21,10 +21,18 @@ export function isProduction() {
   return env.APP_ENV !== 'development';
 }
 
-/** Provider API base. OPENROUTER_BASE_URL is honoured ONLY when APP_ENV=development (PERF-1 stub provider). Production always uses OpenRouter. */
+/** Hosts the development override may point at (FU-22). `new URL('http://[::1]').hostname` is `[::1]`. */
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1', '[::1]', 'localhost']);
+
+/** Provider API base. OPENROUTER_BASE_URL is honoured ONLY when APP_ENV=development AND it is an http(s) URL on a loopback host (PERF-1 stub provider). Anything else, and production always, uses OpenRouter. */
 export function providerBaseUrl(): string {
   const override = (env as unknown as Record<string, string | undefined>).OPENROUTER_BASE_URL;
-  if (!isProduction() && override && /^https?:\/\//.test(override)) return override.replace(/\/+$/, '');
+  if (!isProduction() && override) {
+    try {
+      const u = new URL(override);
+      if ((u.protocol === 'http:' || u.protocol === 'https:') && LOOPBACK_HOSTS.has(u.hostname)) return override.replace(/\/+$/, '');
+    } catch { /* not a URL: use OpenRouter */ }
+  }
   return 'https://openrouter.ai/api/v1';
 }
 

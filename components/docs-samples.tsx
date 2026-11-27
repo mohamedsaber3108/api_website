@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { ENDPOINT_IDS, ENDPOINTS, ERROR_CODES, ONBOARDING, SAMPLE_LANGS, sample, type EndpointId, type SampleLang } from '../lib/docs-samples';
+import { ENDPOINT_IDS, ENDPOINTS, ERROR_CODES, ERROR_NOTES, ONBOARDING, SAMPLE_LANGS, sample, type EndpointId, type SampleLang } from '../lib/docs-samples';
 
 type Lang = 'ar' | 'en';
 const LANG_LABEL: Record<SampleLang, string> = { curl: 'cURL', js: 'JavaScript', python: 'Python' };
@@ -60,10 +60,13 @@ export function ErrorCodes({ lang }: { lang: Lang }) {
   const ar = lang === 'ar';
   return <div id="errors">
     <p>{ar ? 'شكل الخطأ:' : 'Error shape:'} <code dir="ltr">{'{"error":{"message","type","code"}}'}</code>. {ar ? 'واجهة النماذج العامة تعيد' : 'The public models endpoint returns'} <code dir="ltr">{'{"error","code","retry_after"}'}</code>.</p>
+    <div className="table-scroll" role="region" tabIndex={0} aria-label={ar ? 'رموز الأخطاء' : 'Error codes'}>
     <table style={{ width: '100%', borderCollapse: 'collapse' }}>
       <caption style={{ textAlign: 'start' }}>{ar ? 'رموز الأخطاء' : 'Error codes'}</caption>
       <thead><tr><th scope="col" style={{ textAlign: 'start' }}>HTTP</th><th scope="col" style={{ textAlign: 'start' }}>code</th><th scope="col" style={{ textAlign: 'start' }}>{ar ? 'المعنى' : 'Meaning'}</th></tr></thead>
-      <tbody>{ERROR_CODES.map(c => <tr key={`${c.status}-${c.code}`}><td><bdi>{c.status}</bdi></td><td><code dir="ltr">{c.code}</code></td><td>{ar ? c.ar : c.en}</td></tr>)}</tbody>
+      <tbody>{ERROR_CODES.map(c => <tr key={`${c.status}-${c.code}`}><td><bdi>{c.status}</bdi></td><td><code dir="ltr">{c.code}</code></td><td>{ar ? c.ar : c.en}{c.extra?.length ? <>{' '}{ar ? 'حقول إضافية:' : 'Extra fields:'} {c.extra.map(f => <span key={f}>{' '}<code dir="ltr">{f}</code></span>)}</> : null}</td></tr>)}</tbody>
     </table>
+    </div>
+    <ul>{ERROR_NOTES.map(n => <li key={n.id}>{ar ? n.ar : n.en}{n.codes?.map(c => <span key={c}>{' '}<code dir="ltr">{c}</code></span>)}</li>)}</ul>
   </div>;
 }

@@ -153,7 +153,8 @@ export function sample(id: EndpointId, lang: SampleLang, origin: string, model: 
   return pySample(id, url, body);
 }
 
-export type ErrorDoc = { status: number; code: string; endpoints: readonly OpenApiEndpoint[]; en: string; ar: string };
+/** `extra`: number fields the body carries next to `code` (FU-23). */
+export type ErrorDoc = { status: number; code: string; endpoints: readonly OpenApiEndpoint[]; en: string; ar: string; extra?: readonly string[] };
 
 const KEYED: readonly OpenApiEndpoint[] = ['chat', 'balance', 'usage'];
 
@@ -163,8 +164,8 @@ export const ERROR_CODES: readonly ErrorDoc[] = [
   { status: 400, code: 'invalid_request', endpoints: ['chat'], en: 'A field is missing or out of range. The message names the field.', ar: 'حقل ناقص أو خارج المدى. تذكر الرسالة اسم الحقل.' },
   { status: 400, code: 'unsupported_model', endpoints: ['chat'], en: 'Only text-output chat models work on this endpoint.', ar: 'تدعم هذه الواجهة نماذج المحادثة النصية فقط.' },
   { status: 401, code: 'invalid_api_key', endpoints: KEYED, en: 'The key is missing, wrong, expired or revoked.', ar: 'المفتاح مفقود أو خاطئ أو منتهٍ أو ملغى.' },
-  { status: 402, code: 'insufficient_credits', endpoints: ['chat'], en: 'Available credit is below the most this call could cost. Add credit.', ar: 'الرصيد المتاح أقل من أقصى تكلفة محتملة للطلب. أضف رصيداً.' },
-  { status: 402, code: 'spend_limit_reached', endpoints: ['chat'], en: 'The call would pass the spend limit of the account or the key. Raise or clear the limit.', ar: 'سيتجاوز الطلب حدّ الإنفاق للحساب أو للمفتاح. ارفع الحد أو أزله.' },
+  { status: 402, code: 'insufficient_credits', endpoints: ['chat'], en: 'Available credit is below the most this call could cost. Add credit.', ar: 'الرصيد المتاح أقل من أقصى تكلفة محتملة للطلب. أضف رصيداً.', extra: ['need_micro_usd', 'available_micro_usd'] },
+  { status: 402, code: 'spend_limit_reached', endpoints: ['chat'], en: 'The call would pass the spend limit of the account or the key. Raise or clear the limit. limit_is_key is 1 for a key limit, 0 for an account limit.', ar: 'سيتجاوز الطلب حدّ الإنفاق للحساب أو للمفتاح. ارفع الحد أو أزله. القيمة ١ تعني حدّ المفتاح و٠ تعني حدّ الحساب.', extra: ['limit_micro_usd', 'used_micro_usd', 'limit_is_key'] },
   { status: 403, code: 'insufficient_scope', endpoints: KEYED, en: 'The key lacks the scope this call needs (chat, or usage for balance and usage).', ar: 'ينقص المفتاح الصلاحية التي يتطلبها الطلب.' },
   { status: 403, code: 'model_disabled', endpoints: ['chat'], en: 'The model is switched off for now.', ar: 'النموذج موقوف مؤقتاً.' },
   { status: 404, code: 'model_not_found', endpoints: ['chat'], en: 'The model id is not in the catalog.', ar: 'معرّف النموذج غير موجود في الكتالوج.' },
@@ -174,10 +175,24 @@ export const ERROR_CODES: readonly ErrorDoc[] = [
   { status: 429, code: 'provider_rate_limited', endpoints: ['chat'], en: 'The model provider is limiting calls. Try again soon. You are not charged.', ar: 'مزوّد النموذج يحدّ الطلبات. أعد المحاولة بعد قليل. لا يُخصم منك شيء.' },
   { status: 429, code: 'rate_limited', endpoints: ['models'], en: 'Too many catalog calls from your address. The body has retry_after in seconds.', ar: 'طلبات كثيرة من عنوانك. انتظر ثم أعد المحاولة.' },
   { status: 500, code: 'internal_error', endpoints: KEYED, en: 'Unexpected server error. Try again later.', ar: 'خطأ غير متوقع في الخادم. أعد المحاولة لاحقاً.' },
+  { status: 400, code: 'upstream_error', endpoints: ['chat'], en: 'The model provider rejected the request with 400. The provider status passes through. You are not charged.', ar: 'رفض مزوّد النموذج الطلب بالحالة ٤٠٠. تمر حالة المزوّد كما هي. لا يُخصم منك شيء.' },
+  { status: 403, code: 'upstream_error', endpoints: ['chat'], en: 'The model provider refused the call with 403. The provider status passes through. You are not charged.', ar: 'منع مزوّد النموذج الطلب بالحالة ٤٠٣. تمر حالة المزوّد كما هي. لا يُخصم منك شيء.' },
+  { status: 404, code: 'upstream_error', endpoints: ['chat'], en: 'The model provider answered 404. The provider status passes through. You are not charged.', ar: 'أجاب مزوّد النموذج بالحالة ٤٠٤. تمر حالة المزوّد كما هي. لا يُخصم منك شيء.' },
+  { status: 413, code: 'upstream_error', endpoints: ['chat'], en: 'The model provider found the request too large (413). The provider status passes through. You are not charged.', ar: 'وجد مزوّد النموذج الطلب كبيراً جداً (٤١٣). تمر حالة المزوّد كما هي. لا يُخصم منك شيء.' },
+  { status: 422, code: 'upstream_error', endpoints: ['chat'], en: 'The model provider could not process the request (422). The provider status passes through. You are not charged.', ar: 'تعذّر على مزوّد النموذج معالجة الطلب (٤٢٢). تمر حالة المزوّد كما هي. لا يُخصم منك شيء.' },
   { status: 502, code: 'upstream_error', endpoints: ['chat'], en: 'The model provider returned an error. You are not charged.', ar: 'أعاد مزوّد النموذج خطأً. لا يُخصم منك شيء.' },
   { status: 502, code: 'upstream_unreachable', endpoints: ['chat'], en: 'The model provider could not be reached. You are not charged.', ar: 'تعذّر الوصول إلى مزوّد النموذج. لا يُخصم منك شيء.' },
   { status: 503, code: 'service_not_activated', endpoints: ['chat'], en: 'Paid inference is not switched on for this deployment. The Retry-After header says when to look again.', ar: 'الاستدلال المدفوع غير مفعّل في هذا النشر.' },
   { status: 504, code: 'upstream_unreachable', endpoints: ['chat'], en: 'The model provider timed out. You are not charged.', ar: 'انتهت مهلة مزوّد النموذج. لا يُخصم منك شيء.' },
+];
+
+export type ErrorNote = { id: string; en: string; ar: string; codes?: readonly string[] };
+
+/** FU-23: rules that are not one status and code pair. Arabic text has no Latin letters; code names go in `codes`. */
+export const ERROR_NOTES: readonly ErrorNote[] = [
+  { id: 'passthrough', en: 'A client error from the model provider (400, 403, 404, 413, 422 or another 4xx) comes back with the same status and this code. Provider 429 becomes provider_rate_limited. Provider 401, 402 and 5xx become 502.', ar: 'خطأ الطلب القادم من مزوّد النموذج يصلك بالحالة نفسها مع هذا الرمز. الحالة ٤٢٩ من المزوّد تصبح رمزاً آخر، والحالات ٤٠١ و٤٠٢ وكل حالة ٥٠٠ فما فوق تصبح ٥٠٢.', codes: ['upstream_error', 'provider_rate_limited'] },
+  { id: 'fallback', en: 'An error that carries no code of its own answers with this code.', ar: 'الخطأ الذي لا يحمل رمزاً خاصاً به يصل بهذا الرمز.', codes: ['error'] },
+  { id: 'fields-402', en: 'A 402 body adds number fields next to code. Amounts are micro-USD (1 USD = 1,000,000). limit_is_key is 1 or 0.', ar: 'جسم الخطأ ٤٠٢ يضيف حقولاً رقمية بجانب الرمز. المبالغ بالميكرو دولار، والدولار الواحد يساوي مليوناً.', codes: ['need_micro_usd', 'available_micro_usd', 'limit_micro_usd', 'used_micro_usd', 'limit_is_key'] },
 ];
 
 export function statusesFor(endpoint: OpenApiEndpoint): number[] {
