@@ -85,3 +85,11 @@ describe('semantics in the source (UX-A5)', () => {
     expect(app).toContain('id="chat-hint"');
   });
 });
+
+describe('main navigation marks the current page (PR 25 review)', () => {
+  it('desktop and mobile nav buttons set aria-current on the active page', () => {
+    const src = read('app/wasl-app.tsx');
+    const hits = src.match(/aria-current=\{page === p \? "page" : undefined\}/g) ?? [];
+    expect(hits.length).toBeGreaterThanOrEqual(2);
+  });
+});
