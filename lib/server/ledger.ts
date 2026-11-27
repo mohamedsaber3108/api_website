@@ -86,6 +86,14 @@ export async function reserveCredit(userId: string, requestId: string, amount: n
   return (found.results?.length ?? 0) > 0;
 }
 
+/** Settled and released holds are history; they are kept this long, then purged. Open holds are never purged. */
+export const HOLD_KEEP_MS = 30 * 24 * 3600 * 1000;
+
+/** Deletes settled and released hold rows older than `keepMs`. Never touches open holds, the ledger or any balance. */
+export async function purgeOldHolds(keepMs = HOLD_KEEP_MS) {
+  await d1().prepare(`DELETE FROM credit_holds WHERE status IN ('settled', 'released') AND created_at < ?1`).bind(Date.now() - keepMs).run();
+}
+
 /** Statement for db.batch: close the hold together with the ledger charge, so the amount is never counted twice. */
 export function closeHold(requestId: string, status: 'settled' | 'released') {
   return getDb().update(creditHolds).set({ status }).where(and(eq(creditHolds.requestId, requestId), eq(creditHolds.status, 'open')));

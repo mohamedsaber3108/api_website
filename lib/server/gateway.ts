@@ -8,6 +8,7 @@ import { sha256Hex } from './crypto';
 import { findModel } from './catalog';
 import { closeHold, getAvailableMicroUsd, ledgerInsert, reserveCredit } from './ledger';
 import { rateLimit } from './ratelimit';
+import { redactText } from './redact';
 import { HttpError } from './http';
 
 export class GatewayError extends Error {
@@ -136,6 +137,7 @@ async function recordUsage(ctx: ChatContext, model: string, billing: Billing, us
   const providerMicro = status === 'error' ? 0 : typeof usage?.cost === 'number' && usage.cost >= 0 ? (usage.cost > 0 ? Math.max(1, Math.round(usage.cost * 1_000_000)) : 0) : computed;
   const wanted = status === 'error' ? 0 : chargeMicro(providerMicro, billing.markup);
   const charged = holdMicro === null ? wanted : Math.min(wanted, holdMicro);
+  if (holdMicro !== null && wanted > holdMicro) console.error('charge capped at hold', ctx.requestId, `wanted=${wanted} hold=${holdMicro}`);
   const db = getDb();
   try {
     await db.batch([
@@ -160,7 +162,8 @@ async function recordUsage(ctx: ChatContext, model: string, billing: Billing, us
       closeHold(ctx.requestId, status === 'error' ? 'released' : 'settled'),
     ]);
   } catch (e) {
-    console.error('usage metering failed', ctx.requestId, e instanceof Error ? e.message : e);
+    console.error('usage metering failed', ctx.requestId, redactText(e instanceof Error ? e.message : String(e)));
+    if (holdMicro !== null) console.error('hold left open after failed settle; it expires on its own, reconcile if charged', ctx.requestId);
   }
   return { charged, inTokens, outTokens };
 }
