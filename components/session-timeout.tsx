@@ -1,6 +1,7 @@
 'use client';
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { api, ApiError, type SessionInfo, type SessionLimits } from '../lib/client-api';
+import { loginUrl, type SessionReason } from '../lib/session-reason';
 import Dialog from './dialog';
 
 type Tr = (a: string, e: string) => string;
@@ -11,7 +12,7 @@ const POLL_MS = 30_000;
 
 /** `skew` = server clock minus browser clock, so a wrong device clock does not move the warning. */
 const toMark = (l: SessionLimits): Mark => ({ idleEndsAt: l.idleEndsAt, absoluteEndsAt: l.absoluteEndsAt, skew: l.now - Date.now() });
-const goLogin = () => window.location.assign('/login');
+const goLogin = (reason?: SessionReason) => window.location.assign(loginUrl(reason));
 
 /**
  * Staff session time-out (SEC-3b, WCAG 2.2.1). Asks the server every 30 s with ?peek=1 (that does not count as activity).
@@ -32,7 +33,7 @@ export default function SessionTimeout({ tr }: { tr: Tr }) {
   const peek = useCallback(async () => {
     try {
       const s = await api<SessionInfo>('/api/auth/session?peek=1');
-      if (!s.user) { goLogin(); return; }
+      if (!s.user) { goLogin('session_ended'); return; }
       setMark(s.sessionLimits ? toMark(s.sessionLimits) : null);
     } catch {
       // Network error: keep what we know and try again at the next poll.
@@ -68,13 +69,13 @@ export default function SessionTimeout({ tr }: { tr: Tr }) {
       const r = await api<{ sessionLimits?: SessionLimits }>('/api/auth/session', { method: 'POST', body: {} });
       if (r.sessionLimits) setMark(toMark(r.sessionLimits));
     } catch (e) {
-      if (e instanceof ApiError && e.status === 401) goLogin();
+      if (e instanceof ApiError && e.status === 401) goLogin('session_ended');
       else setError(tr('تعذّر تمديد الجلسة. حاول مرة أخرى.', 'Could not extend the session. Try again.'));
     } finally {
       setBusy(false);
     }
   };
-  const signOut = () => { api('/api/auth/logout', { method: 'POST', body: {} }).catch(() => {}).finally(goLogin); };
+  const signOut = () => { api('/api/auth/logout', { method: 'POST', body: {} }).catch(() => {}).finally(() => goLogin()); };
 
   if (!mark || end === null || left === null || left <= 0 || left > WARN_MS) return null;
   if (absolute && hiddenFor === mark.absoluteEndsAt) return null;

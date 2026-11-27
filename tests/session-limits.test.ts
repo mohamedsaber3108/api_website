@@ -5,6 +5,7 @@ import { auditLogs, sessions } from '../db/schema';
 import * as tickets from '../app/api/admin/tickets/route';
 import * as begin from '../app/api/auth/mfa/begin/route';
 import * as session from '../app/api/auth/session/route';
+import { STAFF_TOUCH_MS } from '../lib/server/config';
 import { sha256Hex } from '../lib/server/crypto';
 import { makeUser, req, startDb } from './helpers/db';
 
@@ -80,6 +81,26 @@ describe('idle limit (30 minutes)', () => {
     const u = await user('admin');
     const noOrigin = await (session.POST as Handler)(req('/api/auth/session', { method: 'POST', cookie: u.cookie, body: {}, origin: false }), ctx);
     expect(noOrigin.status).toBe(403);
+  });
+});
+
+describe('activity touch throttle (STAFF_TOUCH_MS)', () => {
+  const seenOf = async (cookie: string) => (await getDb().select().from(sessions).where(eq(sessions.id, await sha256Hex(cookie.split('=')[1]))))[0].lastSeenAt;
+  it('lastSeenAt moves at most once per STAFF_TOUCH_MS, so the session ends up to that long EARLIER than 30 min after the last request', async () => {
+    const u = await user('admin');
+    at(STAFF_TOUCH_MS - 1);
+    expect((await staffCall(u.cookie)).status).toBe(200);
+    expect(await seenOf(u.cookie)).toBe(T0); // inside the window: no write
+    at(STAFF_TOUCH_MS);
+    expect((await staffCall(u.cookie)).status).toBe(200);
+    expect(await seenOf(u.cookie)).toBe(T0 + STAFF_TOUCH_MS); // window over: one write
+    at(STAFF_TOUCH_MS + 30_000);
+    expect((await staffCall(u.cookie)).status).toBe(200);
+    expect(await seenOf(u.cookie)).toBe(T0 + STAFF_TOUCH_MS); // last request was 30 s ago in the window: not written
+    at(STAFF_TOUCH_MS + 30 * MIN - 1);
+    expect((await getSession(u.cookie, true)).user).not.toBeNull();
+    at(STAFF_TOUCH_MS + 30 * MIN); // 30 s before 30 min after the last request
+    expect((await getSession(u.cookie, true)).user).toBeNull();
   });
 });
 

@@ -64,7 +64,7 @@ function safeDecode(value: string): string | null {
  * Resolves the caller from a Wasl session cookie, then the hosted ChatGPT identity headers.
  * Staff sessions end after STAFF_IDLE_MS without activity or STAFF_ABSOLUTE_MS after sign-in: the row is deleted,
  * `auth.session_expired` is audited and the caller is anonymous. `peek` reads the session without counting as activity.
- * shortcut: the idle clock moves at most once per 60 s (STAFF_TOUCH_MS), so the real idle end can be up to 60 s later than shown.
+ * shortcut: the idle clock moves at most once per 60 s (STAFF_TOUCH_MS), so the session can end up to 60 s EARLIER than 30 min after the last activity. Upgrade: touch on every request (one write each) if that matters.
  */
 export async function getPrincipal(request: Request, opts: { peek?: boolean } = {}): Promise<Principal | null> {
   const db = getDb();
