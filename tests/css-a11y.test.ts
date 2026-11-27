@@ -33,8 +33,39 @@ describe('contrast (WCAG AA 4.5:1 for normal text)', () => {
   it('dark theme text pairs', () => {
     for (const bg of ['bg', 'surface', 'surface-alt']) for (const fg of ['ink', 'muted', 'orange']) expect(ratio(dark[fg], dark[bg]), `${fg} on ${bg}`).toBeGreaterThanOrEqual(4.5);
   });
-  it('no 10px grey text colour left hard-coded', () => {
-    expect(css).not.toMatch(/color:#(a0a59f|9aa49c)/);
+  it('no 10px grey text colour left hard-coded, except the one on the dark feature card', () => {
+    const hits = [...css.matchAll(/([^{}]+)\{[^{}]*color:#(?:a0a59f|9aa49c)[^{}]*\}/g)].map((m) => m[1].trim());
+    expect(hits).toEqual(['.feature-main .mini-index']);
+  });
+});
+
+describe('dark surfaces in the light theme', () => {
+  const allRules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((m) => ({ sel: m[1].trim(), body: m[2] }));
+  const hex = (v: string) => /^#[0-9a-f]{6}$/.test(v);
+  // dark roots: a rule outside the dark theme that sets a hard-coded dark background (luminance under 0.05)
+  const roots = allRules
+    .filter((r) => !r.sel.includes('data-theme'))
+    .flatMap((r) => {
+      const bg = /(?:^|;)background:(#[0-9a-f]{6})(?![0-9a-f])/.exec(r.body)?.[1];
+      return bg && lum(bg) < 0.05 && /^\.[a-z-]+$/.test(r.sel) ? [{ cls: r.sel, bg }] : [];
+    });
+  it('finds the dark surfaces', () => {
+    expect(roots.map((r) => r.cls)).toEqual(expect.arrayContaining(['.feature-main', '.calc-result', '.code-block', '.site-footer', '.compare-bar']));
+  });
+  it('text that uses --muted or --orange inside a dark surface passes 4.5:1 on it', () => {
+    for (const root of roots) {
+      for (const r of allRules) {
+        if (r.sel.includes('data-theme') || !r.sel.split(',').some((s) => s.trim().startsWith(root.cls + ' ') || s.trim().startsWith(root.cls + '>'))) continue;
+        for (const m of r.body.matchAll(/(?:^|;)color:var\(--([a-z-]+)\)/g)) expect(ratio(light[m[1]], root.bg), `${r.sel} on ${root.bg}`).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+  });
+  it('.feature-main .mini-index sets its own colour, at least 4.5:1 on the dark card', () => {
+    const bg = roots.find((r) => r.cls === '.feature-main')!.bg;
+    const rule = allRules.find((r) => r.sel === '.feature-main .mini-index');
+    const color = /(?:^|;)color:(#[0-9a-f]{6})/.exec(rule?.body ?? '')?.[1] ?? '';
+    expect(hex(color), 'rule missing or colour not a hex').toBe(true);
+    expect(ratio(color, bg)).toBeGreaterThanOrEqual(4.5);
   });
 });
 
