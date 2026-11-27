@@ -21,6 +21,13 @@ export function isProduction() {
   return env.APP_ENV !== 'development';
 }
 
+/** Provider API base. OPENROUTER_BASE_URL is honoured ONLY when APP_ENV=development (PERF-1 stub provider). Production always uses OpenRouter. */
+export function providerBaseUrl(): string {
+  const override = (env as unknown as Record<string, string | undefined>).OPENROUTER_BASE_URL;
+  if (!isProduction() && override && /^https?:\/\//.test(override)) return override.replace(/\/+$/, '');
+  return 'https://openrouter.ai/api/v1';
+}
+
 export function adminEmails(): Set<string> {
   return new Set((env.ADMIN_EMAILS || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean));
 }
