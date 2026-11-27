@@ -36,7 +36,7 @@ export async function newSession(userId: string, mfaVerifiedAt: number | null = 
   return `wasl_session=${token}`;
 }
 
-/** Admins get an MFA-verified session by default so older admin tests keep testing role checks; pass mfaVerifiedAt: null for a fresh sign-in. */
+/** Staff (support, admin, super_admin) get an MFA-verified session by default so older tests keep testing role checks; pass mfaVerifiedAt: null for a fresh sign-in. */
 export async function makeUser(opts: { role?: string; verified?: boolean; status?: string; email?: string; expiresAt?: number; mfaVerifiedAt?: number | null } = {}) {
   const userId = `u_${randomHex(6)}`;
   const email = opts.email ?? `${userId}@example.test`;
@@ -44,7 +44,7 @@ export async function makeUser(opts: { role?: string; verified?: boolean; status
   const db = getDb();
   await db.insert(accounts).values({ userId, email, createdAt: now, authProvider: 'password', role: opts.role ?? 'customer', status: opts.status ?? 'active', emailVerifiedAt: opts.verified === false ? null : now });
   const token = randomHex(32);
-  await db.insert(sessions).values({ id: await sha256Hex(token), userId, createdAt: now, lastSeenAt: now, expiresAt: opts.expiresAt ?? now + 3600_000, mfaVerifiedAt: opts.mfaVerifiedAt !== undefined ? opts.mfaVerifiedAt : opts.role === 'admin' || opts.role === 'super_admin' ? now : null });
+  await db.insert(sessions).values({ id: await sha256Hex(token), userId, createdAt: now, lastSeenAt: now, expiresAt: opts.expiresAt ?? now + 3600_000, mfaVerifiedAt: opts.mfaVerifiedAt !== undefined ? opts.mfaVerifiedAt : opts.role === 'admin' || opts.role === 'super_admin' || opts.role === 'support' ? now : null });
   return { userId, email, cookie: `wasl_session=${token}` };
 }
 
