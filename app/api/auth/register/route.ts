@@ -6,6 +6,7 @@ import { audit } from '../../../../lib/server/audit';
 import { createAuthToken, createSession } from '../../../../lib/server/auth';
 import { hashPassword } from '../../../../lib/server/crypto';
 import { sendEmail } from '../../../../lib/server/email';
+import { mailLang, renderMail } from '../../../../lib/server/mail-templates';
 import { clientIp, emailSchema, fail, handle, json, parseBody, passwordSchema, requireSameOrigin } from '../../../../lib/server/http';
 import { rateLimit } from '../../../../lib/server/ratelimit';
 
@@ -47,11 +48,7 @@ export const POST = handle(async request => {
 
   const token = await createAuthToken(userId, 'verify_email', 48 * 3600 * 1000);
   const link = `${baseUrl(request)}/verify-email?token=${token}`;
-  await sendEmail({
-    to: body.email,
-    subject: 'Verify your Wasl AI email',
-    text: `Hi ${body.name},\n\nConfirm your email to finish setting up your Wasl AI account:\n${link}\n\nThis link expires in 48 hours. If you did not sign up, ignore this message.`,
-  });
+  await sendEmail({ to: body.email, ...renderMail('verify_email', mailLang(null, request), { link, name: body.name }) });
   await audit(request, userId, 'auth.register', { type: 'account', id: userId });
 
   const cookie = await createSession(request, userId);
