@@ -1,7 +1,10 @@
 import { GET as getCatalog } from '../../catalog/route';
+import { publicLimit } from '../../../../lib/server/ratelimit';
 
 export const dynamic = 'force-dynamic';
 export async function GET(request: Request) {
+  const limited = await publicLimit(request, 'models', 60, 60, { 'Access-Control-Allow-Origin': '*' });
+  if (limited) return limited;
   const url = new URL(request.url);
   const query = (url.searchParams.get('q') || '').trim().toLowerCase().slice(0,100);
   const provider = (url.searchParams.get('provider') || '').toLowerCase();

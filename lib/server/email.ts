@@ -1,5 +1,6 @@
 import { env } from 'cloudflare:workers';
 import { features, isProduction } from './config';
+import { errText } from './redact';
 
 export type Mail = { to: string; subject: string; text: string; html?: string };
 
@@ -22,7 +23,7 @@ export async function sendEmail(mail: Mail): Promise<{ delivered: boolean }> {
     if (!res.ok) console.error('email provider error', res.status);
     return { delivered: res.ok };
   } catch (e) {
-    console.error('email send failed', e instanceof Error ? e.message : e);
+    console.error('email send failed', errText(e));
     return { delivered: false };
   }
 }
