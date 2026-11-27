@@ -224,7 +224,16 @@ export const auditLogs = sqliteTable('audit_logs', {
   meta: text('meta'),
   ip: text('ip'),
   createdAt: integer('created_at').notNull(),
-}, t => [index('audit_time_idx').on(t.createdAt), index('audit_actor_idx').on(t.actorId)]);
+  // SEC-4 (migration 0006). All nullable: rows written before it have none of these and are not part of the chain.
+  seq: integer('seq'),
+  prevHash: text('prev_hash'),
+  hash: text('hash'),
+  actorRole: text('actor_role'),
+  before: text('before'),
+  after: text('after'),
+  reason: text('reason'),
+  result: text('result'),
+}, t => [index('audit_time_idx').on(t.createdAt), index('audit_actor_idx').on(t.actorId), uniqueIndex('audit_seq_uq').on(t.seq), index('audit_action_idx').on(t.action), index('audit_target_idx').on(t.targetId)]);
 
 /**
  * A sensitive admin action waiting for a second person (SEC-2). kind: credit_adjustment | role_change.
