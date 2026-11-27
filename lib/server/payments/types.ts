@@ -26,6 +26,8 @@ export interface PaymentProvider {
   readonly id: 'stripe' | 'stub';
   /** The real charge currency (lower case ISO code). */
   readonly currency: string;
+  /** True if this provider can charge in this currency (upper-case ISO code). Checked before any payment row is written. */
+  supportsCurrency(currency: string): boolean;
   createCheckout(input: CheckoutInput): Promise<{ id: string; url: string }>;
   /** True only if the raw body is genuinely from the provider. */
   verifyWebhook(rawBody: string, headers: Headers): Promise<boolean>;
