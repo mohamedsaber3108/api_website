@@ -19,6 +19,8 @@ declare namespace Cloudflare {
     STRIPE_SECRET_KEY?: string;
     /** Secret. Stripe webhook signing secret (whsec_...). */
     STRIPE_WEBHOOK_SECRET?: string;
+    /** "stub" selects the local development payment stub (only with APP_ENV=development). Unset or "stripe": Stripe. No real provider is chosen yet (Q-API-2). */
+    PAYMENT_PROVIDER?: string;
     /** Secret. Resend API key for transactional email. */
     RESEND_API_KEY?: string;
     /** From address for transactional email, e.g. "Wasl AI <no-reply@wasl.example>". */

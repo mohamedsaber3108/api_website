@@ -40,9 +40,20 @@ export function signupBonusMicroUsd(): number {
   return Number.isFinite(n) && n > 0 && n <= 100 ? Math.round(n * MICRO) : 0;
 }
 
+/**
+ * Which payment provider is active, or null (billing off). PAYMENT_PROVIDER unset or "stripe": Stripe when both keys are set.
+ * "stub": local stub, only when APP_ENV=development (never in production). Any other value: off.
+ */
+export function paymentProvider(): 'stripe' | 'stub' | null {
+  const wanted = (env.PAYMENT_PROVIDER || '').trim().toLowerCase();
+  if (wanted === 'stub') return isProduction() ? null : 'stub';
+  if (wanted !== '' && wanted !== 'stripe') return null;
+  return env.STRIPE_SECRET_KEY && env.STRIPE_WEBHOOK_SECRET ? 'stripe' : null;
+}
+
 export const features = {
   inference: () => env.INFERENCE_ENABLED === 'true' && !!env.OPENROUTER_API_KEY,
-  billing: () => !!env.STRIPE_SECRET_KEY && !!env.STRIPE_WEBHOOK_SECRET,
+  billing: () => paymentProvider() !== null,
   email: () => !!env.RESEND_API_KEY && !!env.EMAIL_FROM,
   /** Trust `oai-authenticated-*` identity headers. Only for the ChatGPT hosting platform. */
   chatgptIdentity: () => env.TRUST_CHATGPT_HEADERS === 'true',
