@@ -45,7 +45,22 @@ export async function usageSummary(userId: string | null, days: number) {
       .from(usageEvents)
       .where(where),
   ]);
-  return { days, daily, byModel, totals };
+  // Day by model rows for the customer table. Skipped for the platform-wide (admin) view.
+  const byDayModel = userId
+    ? await db
+        .select({
+          day,
+          model: usageEvents.model,
+          requests: sql<number>`COUNT(*)`,
+          costMicroUsd: sql<number>`COALESCE(SUM(${usageEvents.costMicroUsd}), 0)`,
+        })
+        .from(usageEvents)
+        .where(where)
+        .groupBy(day, usageEvents.model)
+        .orderBy(day, usageEvents.model)
+        .limit(1000)
+    : [];
+  return { days, daily, byModel, byDayModel, totals };
 }
 
 export function csvEscape(v: unknown): string {

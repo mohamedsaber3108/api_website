@@ -8,6 +8,7 @@ import { flagEnabled } from './flags';
 import { sha256Hex } from './crypto';
 import { findModel } from './catalog';
 import { closeHold, getAvailableMicroUsd, ledgerInsert, reserveCredit } from './ledger';
+import { checkSpendLimits, spendLimitMessage } from './limits';
 import { rateLimit } from './ratelimit';
 import { errText } from './redact';
 import { HttpError } from './http';
@@ -190,9 +191,23 @@ export async function runChat(ctx: ChatContext, body: ChatRequest, signal?: Abor
   const maxCost = chargeMicro(Math.round(inTokensEstimate * billing.inPrice + maxOut * billing.outPrice), billing.markup);
   // SEC-1: reserve the worst-case cost first. The check and the insert are one statement, so parallel calls cannot overspend.
   const holdMicro = maxCost > 0 ? maxCost : null;
-  if (holdMicro !== null && !(await reserveCredit(ctx.userId, ctx.requestId, holdMicro))) {
+  if (holdMicro !== null && !(await reserveCredit(ctx.userId, ctx.requestId, holdMicro, ctx.keyId))) {
     const available = await getAvailableMicroUsd(ctx.userId);
     throw new GatewayError(402, 'insufficient_credits', insufficientCreditsMessage(maxCost, available), {}, { need_micro_usd: maxCost, available_micro_usd: Math.max(available, 0) });
+  }
+
+  // FEAT-2: spend limits, checked after the hold so the used amount includes this call and parallel calls see each other's holds.
+  // On a hit or a failed check the hold is released and the provider is never called. No limit set = no extra work beyond two reads.
+  let limitHit: Awaited<ReturnType<typeof checkSpendLimits>>;
+  try {
+    limitHit = await checkSpendLimits(ctx.userId, ctx.keyId);
+  } catch (e) {
+    await closeHold(ctx.requestId, 'released');
+    throw e;
+  }
+  if (limitHit) {
+    await closeHold(ctx.requestId, 'released');
+    throw new GatewayError(402, 'spend_limit_reached', spendLimitMessage(limitHit), {}, { limit_micro_usd: limitHit.limitMicroUsd, used_micro_usd: limitHit.usedMicroUsd, limit_is_key: limitHit.scope === 'key' ? 1 : 0 });
   }
 
   const upstreamBody: Record<string, unknown> = { ...body, max_tokens: maxOut, usage: { include: true } };
