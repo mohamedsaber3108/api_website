@@ -1,10 +1,13 @@
-import { codesFor, statusesFor, type OpenApiEndpoint } from '../../../../lib/docs-samples';
+import { ERROR_CODES, codesFor, statusesFor, type OpenApiEndpoint } from '../../../../lib/docs-samples';
 
 export const dynamic = 'force-dynamic';
 
 const err = { $ref: '#/components/schemas/Error' };
 const errResponses = (codes: number[]) =>
   Object.fromEntries(codes.map(c => [String(c), { description: ({ 400: 'Invalid request', 401: 'Missing, invalid, expired, or revoked key', 402: 'Insufficient credits or spend limit reached', 403: 'Scope missing or model disabled', 404: 'Model not found', 413: 'Request body too large', 422: 'Variable-price model', 429: 'Rate limited', 500: 'Internal error', 502: 'Provider error', 503: 'Service not activated', 504: 'Provider timeout' } as Record<number, string>)[c], content: { 'application/json': { schema: err } } }]));
+
+/** FU-23: number fields some errors add next to `code` (402). Taken from ERROR_CODES so the list cannot drift. */
+const extraFields = Object.fromEntries([...new Set(ERROR_CODES.flatMap(c => c.extra ?? []))].map(k => [k, { type: 'integer', description: k === 'limit_is_key' ? '1 when the limit is on the key, 0 when on the account' : 'Micro-USD (1 USD = 1,000,000)' }]));
 
 /** FEAT-1: the error responses of one endpoint come from ERROR_CODES (lib/docs-samples.ts), with the machine codes in `x-error-codes`. */
 const errFor = (endpoint: OpenApiEndpoint) => {
@@ -33,7 +36,7 @@ function spec(origin: string) {
     components: {
       securitySchemes: { waslKey: { type: 'http', scheme: 'bearer', description: 'Wasl API key: wasl_ followed by 64 hex characters' } },
       schemas: {
-        Error: { type: 'object', properties: { error: { type: 'object', properties: { message: { type: 'string' }, type: { type: 'string' }, code: { type: 'string' } }, required: ['message', 'code'] } } },
+        Error: { type: 'object', description: 'Provider client errors (4xx) pass through with their own status and code upstream_error; provider 429 is provider_rate_limited; provider 401, 402 and 5xx are 502. An error with no code of its own answers code "error". Some 402 errors add integer fields next to code.', properties: { error: { type: 'object', properties: { message: { type: 'string' }, type: { type: 'string' }, code: { type: 'string', description: 'Machine code. "error" when the failure carries none.' }, ...extraFields }, required: ['message', 'code'] } } },
         Message: { type: 'object', required: ['role'], properties: { role: { enum: ['system', 'user', 'assistant', 'tool', 'developer'] }, content: { oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'object' } }, { type: 'null' }] } } },
         ChatRequest: {
           type: 'object', required: ['model', 'messages'],

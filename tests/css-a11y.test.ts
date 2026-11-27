@@ -131,6 +131,27 @@ describe('focus-visible (UX-A6)', () => {
   });
 });
 
+describe('FU-24 pressed toggles and table scroll', () => {
+  const sem = readFileSync(path.resolve(__dirname, '../app/semantics.css'), 'utf8');
+  const src = (p: string) => readFileSync(path.resolve(__dirname, '..', p), 'utf8');
+  it('aria-pressed="true" shows a check mark and a heavier border, not colour alone', () => {
+    expect(sem).toMatch(/\.pill-link\[aria-pressed="true"\][^{]*\{[^}]*font-weight:800/);
+    expect(sem).toMatch(/\.pill-link\[aria-pressed="true"\][^{]*\{[^}]*box-shadow:inset 0 0 0 1px/);
+    expect(sem).toMatch(/\.pill-link\[aria-pressed="true"\]::before[^{]*\{content:"\\2713"/);
+  });
+  it('.table-scroll scrolls sideways', () => {
+    expect(sem).toMatch(/\.table-scroll\{[^}]*overflow-x:auto/);
+  });
+  it('every table in the docs and usage views sits inside .table-scroll', () => {
+    for (const f of ['components/dashboard.tsx', 'components/docs-samples.tsx']) {
+      const text = src(f);
+      const tables = text.match(/<table\b/g)?.length ?? 0;
+      expect(tables, f).toBeGreaterThan(0);
+      expect(text.match(/<div className="table-scroll"[^>]*><table\b|<div className="table-scroll"[^>]*>\s*<table\b/g)?.length ?? 0, f).toBe(tables);
+    }
+  });
+});
+
 describe('reduced motion', () => {
   it('stops infinite animations and hover movement', () => {
     const m = /@media\(prefers-reduced-motion:reduce\)\{([\s\S]*?)\}\}/.exec(css);
