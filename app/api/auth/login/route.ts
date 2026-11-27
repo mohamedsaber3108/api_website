@@ -34,6 +34,6 @@ export const POST = handle(async request => {
 
   const verified = !!account.emailVerifiedAt;
   const role = verified && adminEmails().has(account.email) ? 'admin' : account.role;
-  const principal: Principal = { userId: account.userId, email: account.email, name: account.name || account.email, role: role as Principal['role'], provider: 'password', emailVerified: verified, sessionId: null };
+  const principal: Principal = { userId: account.userId, email: account.email, name: account.name || account.email, role: role as Principal['role'], provider: 'password', emailVerified: verified, sessionId: null, mfaVerifiedAt: null };
   return json({ user: publicUser(principal) }, 200, { 'Set-Cookie': cookie });
 });

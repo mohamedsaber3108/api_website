@@ -4,6 +4,7 @@
 // Each run creates ~4 accounts; sign-up is limited to 10/hour per IP, so between repeated
 // runs clear the local buckets (with the server stopped):
 //   wrangler d1 execute DB --local ... --command "DELETE FROM rate_limit_buckets"
+import { createHmac } from 'node:crypto';
 const BASE = (process.argv[2] || 'http://127.0.0.1:8799').replace(/\/$/, '');
 const ADMIN = process.argv[3] || 'admin@test.local';
 const run = Date.now().toString(36);
@@ -126,6 +127,21 @@ check('admin signed in', ar.status === 200 || ar.status === 201, `${ar.status} $
 const who = await a('/api/auth/session');
 check('admin role resolved from ADMIN_EMAILS', who.json.user?.role === 'admin', JSON.stringify(who.json.user));
 if (who.json.user?.role === 'admin') {
+  // Admin MFA (SEC-3a): admin routes are closed until the session passes MFA. Enrol with a TOTP computed here.
+  const blocked = await a('/api/admin/overview');
+  check('admin without MFA gets 403 mfa_required', blocked.status === 403 && blocked.json.code === 'mfa_required', `${blocked.status} ${JSON.stringify(blocked.json)}`);
+  const begun = await a('/api/auth/mfa/begin', { method: 'POST', body: {} });
+  check('admin MFA enrolment starts', begun.status === 200 && !!begun.json.secret, `${begun.status} ${JSON.stringify(begun.json)} (re-run with a fresh state dir)`);
+  const totp = secretB32 => {
+    const A = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'; let bits = '';
+    for (const ch of secretB32) bits += A.indexOf(ch).toString(2).padStart(5, '0');
+    const key = Buffer.from(bits.match(/.{8}/g).map(x => parseInt(x, 2)));
+    const msg = Buffer.alloc(8); msg.writeBigUInt64BE(BigInt(Math.floor(Date.now() / 30000)));
+    const h = createHmac('sha1', key).update(msg).digest(); const o = h[19] & 15;
+    return String(((h[o] & 0x7f) << 24 | h[o + 1] << 16 | h[o + 2] << 8 | h[o + 3]) % 1e6).padStart(6, '0');
+  };
+  const confirmed = await a('/api/auth/mfa/confirm', { method: 'POST', body: { code: totp(begun.json.secret) } });
+  check('admin MFA enrolled with 10 recovery codes', confirmed.status === 200 && confirmed.json.recoveryCodes?.length === 10, `${confirmed.status} ${JSON.stringify(confirmed.json)}`);
   check('admin overview', (await a('/api/admin/overview')).status === 200);
   const users = await a(`/api/admin/users?q=${encodeURIComponent(email)}`);
   const target = users.json.users?.[0];

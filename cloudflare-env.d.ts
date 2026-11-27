@@ -26,6 +26,8 @@ declare namespace Cloudflare {
     CLIENT_IP_HEADER?: string;
     /** "true" only on the ChatGPT hosting platform, which sets and sanitises oai-authenticated-* headers. */
     TRUST_CHATGPT_HEADERS?: string;
+    /** Secret. Encrypts admin TOTP secrets (AES-GCM). Required in production; admin routes fail closed without it. */
+    MFA_ENCRYPTION_KEY?: string;
     /** Signup bonus in USD for new accounts. Default 0. */
     SIGNUP_BONUS_USD?: string;
   }

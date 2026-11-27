@@ -19,6 +19,8 @@ export const PATCH = handle<{ id: string }>(async (request, ctx) => {
   if (!target || target.status === 'deleted') return fail(404, 'User not found', 'not_found');
   if (!body.role && !body.status) return fail(400, 'Nothing to change', 'invalid_request');
   await db.update(accounts).set({ ...(body.role ? { role: body.role } : {}), ...(body.status ? { status: body.status } : {}) }).where(eq(accounts.userId, id));
+  // A role change ends MFA verification of that user's sessions (a demoted then promoted admin must verify again).
+  if (body.role) await db.update(sessions).set({ mfaVerifiedAt: null }).where(eq(sessions.userId, id));
   if (body.status === 'suspended') {
     // Suspension takes effect immediately: drop sessions and disable keys.
     await db.batch([db.delete(sessions).where(eq(sessions.userId, id)), db.update(apiKeys).set({ revokedAt: Date.now() }).where(and(eq(apiKeys.userId, id), isNull(apiKeys.revokedAt)))]);

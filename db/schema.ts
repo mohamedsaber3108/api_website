@@ -38,7 +38,28 @@ export const sessions = sqliteTable('sessions', {
   expiresAt: integer('expires_at').notNull(),
   ip: text('ip'),
   userAgent: text('user_agent'),
+  /** Set when this session passed an MFA check (TOTP or recovery code). Admin routes need it. */
+  mfaVerifiedAt: integer('mfa_verified_at'),
 }, t => [index('sessions_user_idx').on(t.userId)]);
+
+/** TOTP secret per admin, AES-GCM encrypted with MFA_ENCRYPTION_KEY (user id as additional data). `enrolledAt` is null while enrolment is pending. */
+export const mfaCredentials = sqliteTable('mfa_credentials', {
+  userId: text('user_id').primaryKey().references(() => accounts.userId),
+  secretEnc: text('secret_enc').notNull(),
+  createdAt: integer('created_at').notNull(),
+  enrolledAt: integer('enrolled_at'),
+  /** Highest 30 s TOTP step already accepted; a code for a step <= this is a replay. */
+  lastUsedStep: integer('last_used_step'),
+});
+
+/** Single-use recovery codes, stored only as HMAC-SHA-256 keyed with MFA_ENCRYPTION_KEY. */
+export const mfaRecoveryCodes = sqliteTable('mfa_recovery_codes', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull().references(() => accounts.userId),
+  hash: text('hash').notNull().unique(),
+  createdAt: integer('created_at').notNull(),
+  usedAt: integer('used_at'),
+}, t => [index('mfa_recovery_user_idx').on(t.userId)]);
 
 export const authTokens = sqliteTable('auth_tokens', {
   id: text('id').primaryKey(),

@@ -4,6 +4,7 @@ import { accounts, authTokens, sessions } from '../../db/schema';
 import { adminEmails, features, SESSION_COOKIE, SESSION_TTL_MS } from './config';
 import { randomHex, sha256Hex } from './crypto';
 import { clientIp, cookieHeader, HttpError, readCookie } from './http';
+import { assertAdminMfa } from './mfa';
 
 export type Role = 'customer' | 'support' | 'admin';
 
@@ -15,6 +16,8 @@ export type Principal = {
   provider: 'password' | 'chatgpt';
   emailVerified: boolean;
   sessionId: string | null;
+  /** When this session last passed MFA; null if never (or for hosted ChatGPT identity, which has no session). */
+  mfaVerifiedAt: number | null;
 };
 
 const USER_ID_HEADER = 'oai-authenticated-user-id';
@@ -61,6 +64,7 @@ export async function getPrincipal(request: Request): Promise<Principal | null> 
         provider: 'password',
         emailVerified: verified,
         sessionId: id,
+        mfaVerifiedAt: row.s.mfaVerifiedAt,
       };
     }
   }
@@ -87,6 +91,7 @@ export async function getPrincipal(request: Request): Promise<Principal | null> 
         provider: 'chatgpt',
         emailVerified: true,
         sessionId: null,
+        mfaVerifiedAt: null,
       };
     }
   }
@@ -102,7 +107,16 @@ export async function requireUser(request: Request): Promise<Principal> {
 export async function requireRole(request: Request, ...roles: Role[]): Promise<Principal> {
   const p = await requireUser(request);
   if (!roles.includes(p.role)) throw new HttpError(403, 'Forbidden', 'forbidden');
+  // Admins also need an MFA-verified session. Support staff are not required yet (SEC-3b).
+  if (p.role === 'admin') await assertAdminMfa(p);
   return p;
+}
+
+/** Like requireUser, but for the MFA routes: an admin with a real session cookie (hosted ChatGPT identity has none). */
+export async function requireAdminSession(request: Request): Promise<Principal & { sessionId: string }> {
+  const p = await requireUser(request);
+  if (p.role !== 'admin' || !p.sessionId) throw new HttpError(403, 'Forbidden', 'forbidden');
+  return p as Principal & { sessionId: string };
 }
 
 /** Creates a session row and returns the Set-Cookie header value. */

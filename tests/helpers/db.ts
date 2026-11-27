@@ -21,19 +21,30 @@ export async function startDb() {
     }
   }
   env.DB = proxy.env.DB;
+  // Admin routes fail closed without this (production mode). Tests that check that behaviour delete it.
+  env.MFA_ENCRYPTION_KEY = 'test-only-mfa-key-0123456789-abcdefghij';
   return { dispose: () => proxy.dispose() };
 }
 
 export const ORIGIN = 'http://localhost';
 
-export async function makeUser(opts: { role?: string; verified?: boolean; status?: string; email?: string; expiresAt?: number } = {}) {
+/** Adds another session for a user. `mfaVerifiedAt` defaults to null (a fresh sign-in has not passed MFA). */
+export async function newSession(userId: string, mfaVerifiedAt: number | null = null) {
+  const token = randomHex(32);
+  const now = Date.now();
+  await getDb().insert(sessions).values({ id: await sha256Hex(token), userId, createdAt: now, lastSeenAt: now, expiresAt: now + 3600_000, mfaVerifiedAt });
+  return `wasl_session=${token}`;
+}
+
+/** Admins get an MFA-verified session by default so older admin tests keep testing role checks; pass mfaVerifiedAt: null for a fresh sign-in. */
+export async function makeUser(opts: { role?: string; verified?: boolean; status?: string; email?: string; expiresAt?: number; mfaVerifiedAt?: number | null } = {}) {
   const userId = `u_${randomHex(6)}`;
   const email = opts.email ?? `${userId}@example.test`;
   const now = Date.now();
   const db = getDb();
   await db.insert(accounts).values({ userId, email, createdAt: now, authProvider: 'password', role: opts.role ?? 'customer', status: opts.status ?? 'active', emailVerifiedAt: opts.verified === false ? null : now });
   const token = randomHex(32);
-  await db.insert(sessions).values({ id: await sha256Hex(token), userId, createdAt: now, lastSeenAt: now, expiresAt: opts.expiresAt ?? now + 3600_000 });
+  await db.insert(sessions).values({ id: await sha256Hex(token), userId, createdAt: now, lastSeenAt: now, expiresAt: opts.expiresAt ?? now + 3600_000, mfaVerifiedAt: opts.mfaVerifiedAt !== undefined ? opts.mfaVerifiedAt : opts.role === 'admin' ? now : null });
   return { userId, email, cookie: `wasl_session=${token}` };
 }
 
