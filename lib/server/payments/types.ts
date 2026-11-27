@@ -16,7 +16,7 @@ export type CheckoutInput = {
 
 /** What a provider webhook means for us, in one provider-neutral shape. */
 export type ProviderEvent =
-  | { kind: 'paid'; eventId: string; type: string; sessionId: string; paymentId: string; intent: string | null }
+  | { kind: 'paid'; eventId: string; type: string; sessionId: string; paymentId: string; intent: string | null; amountMinor: number; currency: string }
   | { kind: 'closed'; eventId: string; type: string; paymentId: string; status: 'expired' | 'failed' }
   | { kind: 'refunded'; eventId: string; type: string; intent: string; amountRefunded: number }
   | { kind: 'ignored'; eventId: string; type: string };

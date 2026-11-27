@@ -16,7 +16,8 @@ function parseStripeEvent(raw: string): ProviderEvent | null {
     const meta = obj.metadata as Record<string, string> | null | undefined;
     const paymentId = (obj.client_reference_id as string | null) || (meta?.payment_id ?? null);
     if (obj.payment_status === 'paid' && paymentId) {
-      return { kind: 'paid', ...base, sessionId: String(obj.id), paymentId, intent: typeof obj.payment_intent === 'string' ? obj.payment_intent : null };
+      // A missing amount becomes -1 so it can never equal a stored payment: completePayment refuses it.
+      return { kind: 'paid', ...base, sessionId: String(obj.id), paymentId, intent: typeof obj.payment_intent === 'string' ? obj.payment_intent : null, amountMinor: typeof obj.amount_total === 'number' ? obj.amount_total : -1, currency: typeof obj.currency === 'string' ? obj.currency : '' };
     }
   } else if (e.type === 'checkout.session.expired' || e.type === 'checkout.session.async_payment_failed') {
     const paymentId = obj.client_reference_id as string | null;

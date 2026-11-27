@@ -46,7 +46,7 @@ export const POST = handle(async request => {
   try {
     if (event.kind === 'paid') {
       const [p] = await db.select({ id: payments.id }).from(payments).where(and(eq(payments.id, event.paymentId), or(eq(payments.providerSessionId, event.sessionId), eq(payments.status, 'pending')))).limit(1);
-      if (p) await completePayment(event.paymentId, event.intent);
+      if (p) await completePayment(event.paymentId, event.intent, { amountMinor: event.amountMinor, currency: event.currency });
     } else if (event.kind === 'closed') {
       await db.update(payments).set({ status: event.status }).where(and(eq(payments.id, event.paymentId), eq(payments.status, 'pending')));
     } else if (event.kind === 'refunded') {

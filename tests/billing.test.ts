@@ -45,7 +45,7 @@ async function pendingPayment(amountMinor = 1000, creditMicroUsd = 10_000_000) {
   await getDb().insert(payments).values({ id, userId: u.userId, provider: 'stripe', amountMinor, currency: 'usd', creditMicroUsd, status: 'pending', createdAt: Date.now() });
   return { u, id };
 }
-const completed = (eventId: string, paymentId: string, intent = 'pi_' + paymentId) => ({ id: eventId, type: 'checkout.session.completed', data: { object: { id: 'cs_' + paymentId, client_reference_id: paymentId, payment_status: 'paid', payment_intent: intent } } });
+const completed = (eventId: string, paymentId: string, intent = 'pi_' + paymentId, amountTotal = 1000) => ({ id: eventId, type: 'checkout.session.completed', data: { object: { id: 'cs_' + paymentId, client_reference_id: paymentId, payment_status: 'paid', payment_intent: intent, amount_total: amountTotal, currency: 'usd' } } });
 const refunded = (eventId: string, intent: string, amountRefunded: number) => ({ id: eventId, type: 'charge.refunded', data: { object: { payment_intent: intent, amount_refunded: amountRefunded } } });
 
 describe('Stripe signature', () => {
@@ -145,7 +145,7 @@ describe('webhook route', () => {
 describe('refund math', () => {
   async function paid(amountMinor: number, creditMicroUsd: number) {
     const p = await pendingPayment(amountMinor, creditMicroUsd);
-    await post(completed('evt_p_' + p.id, p.id));
+    await post(completed('evt_p_' + p.id, p.id, undefined, amountMinor));
     return { ...p, intent: 'pi_' + p.id };
   }
   it('partial refund returns the same share of credit; full refund returns the rest', async () => {
