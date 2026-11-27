@@ -8,6 +8,8 @@ import type { PaymentProvider } from './types';
 export const stubProvider: PaymentProvider = {
   id: 'stub',
   currency: 'usd',
+  // The stub charges whatever currency the stored price names (the price table limits it to EGP, SAR, USD).
+  supportsCurrency: () => true,
   async createCheckout(input) {
     const id = `stub_cs_${crypto.randomUUID().replace(/-/g, '')}`;
     return { id, url: `${input.origin}/billing/stub-checkout?session=${encodeURIComponent(id)}` };

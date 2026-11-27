@@ -5,10 +5,11 @@ import { payments } from '../../../../db/schema';
 import { INFERENCE_OFF_MESSAGE } from '../../../../lib/checkout-error';
 import { audit } from '../../../../lib/server/audit';
 import { requireUser } from '../../../../lib/server/auth';
-import { baseUrl, CREDIT_PACKAGES, MICRO } from '../../../../lib/server/config';
+import { baseUrl, MICRO } from '../../../../lib/server/config';
 import { inferenceEnabled } from '../../../../lib/server/flags';
 import { fail, handle, json, parseBody, requireSameOrigin } from '../../../../lib/server/http';
 import { getPaymentProvider } from '../../../../lib/server/payments';
+import { CURRENCY_UNSUPPORTED_MESSAGE, findPricePoint, PACKAGE_ID_RE, PRICE_UNAVAILABLE_MESSAGE } from '../../../../lib/server/prices';
 import { rateLimit } from '../../../../lib/server/ratelimit';
 
 export const dynamic = 'force-dynamic';
@@ -22,27 +23,40 @@ export const POST = handle(async request => {
   if (!(await inferenceEnabled())) return fail(503, INFERENCE_OFF_MESSAGE.en, 'inference_not_enabled', { message_ar: INFERENCE_OFF_MESSAGE.ar });
   if (!user.emailVerified) return fail(403, 'Verify your email before adding credits', 'email_not_verified');
   await rateLimit(`checkout:${user.userId}`, 10, 3600);
-  const { amountUsd } = await parseBody(request, z.object({ amountUsd: z.number().refine(v => (CREDIT_PACKAGES as readonly number[]).includes(v), 'Choose one of the listed amounts') }));
+  // `amountUsd` is the old body (USD packages only); it maps to package `credits-<n>` in USD.
+  const body = await parseBody(request, z.object({
+    packageId: z.string().regex(PACKAGE_ID_RE).optional(),
+    currency: z.string().regex(/^[A-Za-z]{3}$/).optional(),
+    amountUsd: z.number().optional(),
+  }).refine(b => b.packageId !== undefined || b.amountUsd !== undefined, 'packageId is required'));
+  const packageId = body.packageId ?? `credits-${body.amountUsd}`;
+  const currency = (body.currency ?? 'USD').toUpperCase();
+
+  // The stored price decides the amount. No conversion between currencies.
+  const price = await findPricePoint(packageId, currency);
+  if (!price) return fail(400, PRICE_UNAVAILABLE_MESSAGE.en, 'price_not_available', { message_ar: PRICE_UNAVAILABLE_MESSAGE.ar });
+  if (!provider.supportsCurrency(price.currency)) return fail(400, CURRENCY_UNSUPPORTED_MESSAGE.en, 'currency_not_supported', { message_ar: CURRENCY_UNSUPPORTED_MESSAGE.ar });
 
   const id = `pay_${crypto.randomUUID().replace(/-/g, '')}`;
-  const amountMinor = amountUsd * 100;
+  const amountMinor = price.amountMinor;
+  const chargeCurrency = price.currency.toLowerCase();
   const db = getDb();
-  await db.insert(payments).values({ id, userId: user.userId, provider: provider.id, amountMinor, currency: provider.currency, creditMicroUsd: amountUsd * MICRO, status: 'pending', createdAt: Date.now() });
+  await db.insert(payments).values({ id, userId: user.userId, provider: provider.id, amountMinor, currency: chargeCurrency, creditMicroUsd: price.credits, status: 'pending', createdAt: Date.now() });
   try {
     const origin = baseUrl(request);
     const session = await provider.createCheckout({
       paymentId: id,
       amountMinor,
-      currency: provider.currency,
+      currency: chargeCurrency,
       email: user.email,
-      description: `Wasl AI credits ($${amountUsd})`,
+      description: `Wasl AI credits ($${price.credits / MICRO})`,
       origin,
       successUrl: `${origin}/dashboard?tab=billing&payment=success`,
       cancelUrl: `${origin}/dashboard?tab=billing&payment=cancelled`,
     });
     await db.update(payments).set({ providerSessionId: session.id }).where(eq(payments.id, id));
-    await audit(request, user.userId, 'billing.checkout_started', { type: 'payment', id }, { amountUsd });
-    return json({ url: session.url, paymentId: id, currency: provider.currency, amountMinor, provider: provider.id }, 201);
+    await audit(request, user.userId, 'billing.checkout_started', { type: 'payment', id }, { packageId, currency: price.currency, amountMinor });
+    return json({ url: session.url, paymentId: id, currency: chargeCurrency, amountMinor, provider: provider.id }, 201);
   } catch (e) {
     await db.update(payments).set({ status: 'failed' }).where(eq(payments.id, id));
     throw e;

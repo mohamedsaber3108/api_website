@@ -1,5 +1,27 @@
-import { sqliteTable, text, integer, index, uniqueIndex, primaryKey } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, text, integer, index, uniqueIndex, primaryKey, check } from 'drizzle-orm/sqlite-core';
 import { sql } from 'drizzle-orm';
+
+/**
+ * PAY-2 / PKG-1: price and credit amount per (package, currency), set by hand by a super_admin. Not converted at checkout.
+ * `credits` is micro-USD of credit granted. `amountMinor` is the charge in the currency's minor units (2 decimals for EGP, SAR, USD).
+ */
+export const pricePoints = sqliteTable('price_points', {
+  id: text('id').primaryKey(),
+  packageId: text('package_id').notNull(),
+  /** Upper-case ISO code: EGP, SAR or USD. */
+  currency: text('currency').notNull(),
+  amountMinor: integer('amount_minor').notNull(),
+  credits: integer('credits').notNull(),
+  active: integer('active').notNull().default(1),
+  createdAt: integer('created_at').notNull(),
+  updatedAt: integer('updated_at').notNull(),
+  updatedBy: text('updated_by'),
+}, t => [
+  uniqueIndex('price_points_pkg_currency_uq').on(t.packageId, t.currency),
+  check('price_points_currency_chk', sql`length(currency) = 3 AND currency = upper(currency)`),
+  check('price_points_amount_chk', sql`amount_minor > 0`),
+  check('price_points_credits_chk', sql`credits > 0`),
+]);
 
 /**
  * Money is stored as integer micro-USD (1 USD = 1_000_000) everywhere except

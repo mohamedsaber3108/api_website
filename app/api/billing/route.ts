@@ -2,7 +2,8 @@ import { desc, eq } from 'drizzle-orm';
 import { getDb } from '../../../db';
 import { creditLedger, invoices, payments } from '../../../db/schema';
 import { requireUser } from '../../../lib/server/auth';
-import { CREDIT_PACKAGES, features } from '../../../lib/server/config';
+import { features } from '../../../lib/server/config';
+import { listPackages } from '../../../lib/server/prices';
 import { inferenceEnabled } from '../../../lib/server/flags';
 import { handle, json } from '../../../lib/server/http';
 import { getBalanceSummary } from '../../../lib/server/ledger';
@@ -33,5 +34,5 @@ export const GET = handle(async request => {
       .orderBy(desc(invoices.issuedAt))
       .limit(20),
   ]);
-  return json({ balanceMicroUsd: summary.balanceMicroUsd, heldMicroUsd: summary.heldMicroUsd, availableMicroUsd: summary.availableMicroUsd, packages: CREDIT_PACKAGES, checkoutEnabled: features.billing(), inferenceEnabled: await inferenceEnabled(), emailVerified: user.emailVerified, transactions, payments: paymentRows, invoices: invoiceRows });
+  return json({ balanceMicroUsd: summary.balanceMicroUsd, heldMicroUsd: summary.heldMicroUsd, availableMicroUsd: summary.availableMicroUsd, packages: await listPackages(), checkoutEnabled: features.billing(), inferenceEnabled: await inferenceEnabled(), emailVerified: user.emailVerified, transactions, payments: paymentRows, invoices: invoiceRows });
 });

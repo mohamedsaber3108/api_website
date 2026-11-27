@@ -43,7 +43,8 @@ export async function completePayment(paymentId: string, intent: string | null, 
   ]);
   if (claimed.length !== 1) return false; // another call won the claim; it sends the mail
   const [acct] = await db.select({ email: accounts.email }).from(accounts).where(eq(accounts.userId, p.userId)).limit(1);
-  if (acct) await sendEmail({ to: acct.email, subject: `Wasl AI receipt ${number}`, text: `Thanks. We added $${(p.creditMicroUsd / 1e6).toFixed(2)} in credits to your account.\nInvoice: ${number}` });
+  const paidText = `${(p.amountMinor / 100).toFixed(2)} ${p.currency.toUpperCase()}`;
+  if (acct) await sendEmail({ to: acct.email, subject: `Wasl AI receipt ${number}`, text: `Thanks. We added $${(p.creditMicroUsd / 1e6).toFixed(2)} in credits to your account.\nYou paid ${paidText}.\nInvoice: ${number}\n\nشكرًا لك. المبلغ المدفوع: ${paidText}` });
   await audit(null, p.userId, 'billing.payment_completed', { type: 'payment', id: p.id });
   return true;
 }

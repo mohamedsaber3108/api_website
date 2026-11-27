@@ -31,6 +31,8 @@ function parseStripeEvent(raw: string): ProviderEvent | null {
 export const stripeProvider: PaymentProvider = {
   id: 'stripe',
   currency: 'usd',
+  // shortcut: the Stripe helper in ../stripe creates USD sessions only. Upgrade when a provider for EGP/SAR is chosen (Q-API-2).
+  supportsCurrency: c => c.toUpperCase() === 'USD',
   createCheckout: input =>
     createStripeCheckout({
       paymentId: input.paymentId,
