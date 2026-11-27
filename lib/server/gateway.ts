@@ -207,7 +207,7 @@ export async function runChat(ctx: ChatContext, body: ChatRequest, signal?: Abor
   }
   if (limitHit) {
     await closeHold(ctx.requestId, 'released');
-    throw new GatewayError(402, 'spend_limit_reached', spendLimitMessage(limitHit), {}, { limit_micro_usd: limitHit.limitMicroUsd, used_micro_usd: limitHit.usedMicroUsd });
+    throw new GatewayError(402, 'spend_limit_reached', spendLimitMessage(limitHit), {}, { limit_micro_usd: limitHit.limitMicroUsd, used_micro_usd: limitHit.usedMicroUsd, limit_is_key: limitHit.scope === 'key' ? 1 : 0 });
   }
 
   const upstreamBody: Record<string, unknown> = { ...body, max_tokens: maxOut, usage: { include: true } };
