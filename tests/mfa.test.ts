@@ -140,7 +140,7 @@ describe('admin without MFA', () => {
     const noOrigin = await begin.POST(req('/api/auth/mfa/begin', { method: 'POST', cookie: a.cookie, body: {}, origin: false }), ctx);
     expect(noOrigin.status).toBe(403);
     expect((await noOrigin.json()).code).toBe('invalid_origin');
-    for (const role of ['customer', 'support']) {
+    for (const role of ['customer']) {
       const u = await makeUser({ role });
       expect((await doBegin(u.cookie)).status).toBe(403);
     }
@@ -343,7 +343,7 @@ describe('A5: a role change ends MFA verification', () => {
 });
 
 describe('support and customer are unaffected', () => {
-  it('support still reaches staff routes without MFA, and is still refused admin-only routes with forbidden', async () => {
+  it('a verified support session reaches staff routes, and is still refused admin-only routes with forbidden', async () => {
     const s = await makeUser({ role: 'support' });
     expect((await callAdmin('GET', '/api/admin/tickets', tickets.GET, s.cookie)).status).toBe(200);
     expect((await callAdmin('GET', '/api/admin/overview', overview.GET, s.cookie)).status).toBe(200);
@@ -367,9 +367,11 @@ describe('fail closed without MFA_ENCRYPTION_KEY', () => {
       expect(res.status).toBe(503);
       expect((await res.json()).code).toBe('mfa_not_configured');
       expect((await doBegin(a.cookie)).status).toBe(503);
-      // Support staff and customers are not affected by the missing key.
+      // Support staff need MFA too (SEC-3b), so the missing key stops them as well.
       const s = await makeUser({ role: 'support' });
-      expect((await callAdmin('GET', '/api/admin/tickets', tickets.GET, s.cookie)).status).toBe(200);
+      const sres = await callAdmin('GET', '/api/admin/tickets', tickets.GET, s.cookie);
+      expect(sres.status).toBe(503);
+      expect((await sres.json()).code).toBe('mfa_not_configured');
     } finally { env.MFA_ENCRYPTION_KEY = 'test-only-mfa-key-0123456789-abcdefghij'; }
   });
   it('R4: in production a key shorter than 32 characters is refused with 503; 32 characters work', async () => {

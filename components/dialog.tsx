@@ -6,8 +6,9 @@ const FOCUSABLE = 'a[href],button:not([disabled]),input:not([disabled]),select:n
 /**
  * Modal dialog: focus moves in on open and returns on close, Tab and Shift+Tab stay inside, Esc closes.
  * A click outside does not close it, so typed text is not lost by accident. Layout uses logical properties, so it works in RTL.
+ * `alert` makes it an alertdialog (for a time-out warning) and `describedBy` names the element that holds its message.
  */
-export default function Dialog({ title, onClose, children }: { title: React.ReactNode; onClose: () => void; children: React.ReactNode }) {
+export default function Dialog({ title, onClose, children, alert = false, describedBy }: { title: React.ReactNode; onClose: () => void; children: React.ReactNode; alert?: boolean; describedBy?: string }) {
   const box = useRef<HTMLDivElement>(null);
   const titleId = useId();
   const close = useRef(onClose);
@@ -30,6 +31,6 @@ export default function Dialog({ title, onClose, children }: { title: React.Reac
     document.addEventListener('keydown', onKey, true);
     return () => { document.removeEventListener('keydown', onKey, true); before?.focus?.(); };
   }, []);
-  return <div className="modal-backdrop"><div className="modal-card" role="dialog" aria-modal="true" aria-labelledby={titleId} ref={box} tabIndex={-1}>
+  return <div className="modal-backdrop"><div className="modal-card" role={alert ? 'alertdialog' : 'dialog'} aria-modal="true" aria-labelledby={titleId} aria-describedby={describedBy} ref={box} tabIndex={-1}>
     <h3 id={titleId}>{title}</h3>{children}</div></div>;
 }
