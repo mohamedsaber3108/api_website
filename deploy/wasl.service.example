@@ -1,0 +1,78 @@
+# EXAMPLE ONLY (OPS-4). Not installed, not run by any script in this repo.
+# A hardened version of the unit that deploy/setup-server.sh writes to /etc/systemd/system/wasl.service.
+# To use it: review every comment, copy it over the unit yourself, then
+#   sudo systemctl daemon-reload && sudo systemctl restart wasl
+# and check: systemd-analyze security wasl   and   journalctl -u wasl -n 50
+# Test on staging first. Nothing here was run on a real host.
+#
+# SIZING. OPS-2 has no measurement of this box. The numbers assume an EC2 box with 2 vCPU and 2 GB RAM.
+# They are guesses (OPS-2 section 4: measure memory after 1 h, after load, after 24 h, then change them).
+# Change them to fit your box; keep MemoryHigh below MemoryMax and MemoryMax below total RAM minus
+# room for Caddy, sshd and the OS (about 400 MB).
+#
+# To undo: put the old unit text back, run daemon-reload, restart wasl.
+[Unit]
+Description=Wasl AI (workerd via wrangler, local D1)
+After=network-online.target
+Wants=network-online.target
+# Stop restart loops: at most 5 starts in 5 minutes, then systemd gives up and the unit shows "failed".
+# Then look at the journal. (Reset with: systemctl reset-failed wasl)
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+User=wasl
+Group=wasl
+WorkingDirectory=/opt/wasl/current
+Environment=NODE_ENV=production
+Environment=CI=true
+Environment=WRANGLER_SEND_METRICS=false
+Environment=SITES_PNPM_SHARED_STORE=/opt/wasl/pnpm-store
+ExecStart=/usr/local/bin/node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js dev --config dist/server/wrangler.json --local --persist-to /var/lib/wasl --ip 127.0.0.1 --port 8787 --inspector-port 0 --show-interactive-dev-session=false --log-level info
+
+# ---- Restart --------------------------------------------------------------------------------------
+# on-failure: restart after a crash or a kill, not after a clean stop (systemctl stop). The old unit used "always".
+# A memory-limit kill counts as a failure, so it restarts too.
+Restart=on-failure
+RestartSec=3
+
+# ---- Watchdog -------------------------------------------------------------------------------------
+# WatchdogSec is NOT set on purpose. It needs the app to send "I am alive" messages to systemd (sd_notify).
+# wrangler dev does not, so the watchdog would kill a healthy service every interval.
+# For a hung process use a separate timer that calls /api/v1/health and restarts after 3 failures (OPS-2 option a).
+
+# ---- Resource limits ------------------------------------------------------------------------------
+# MemoryHigh: above this the kernel slows the service and reclaims memory. A soft brake.
+MemoryHigh=1200M
+# MemoryMax: above this the kernel kills it (then Restart=on-failure starts it again). A hard cap.
+MemoryMax=1500M
+# CPUQuota: 100% is one core. 150% on 2 vCPU leaves half a core for Caddy and the OS.
+CPUQuota=150%
+# TasksMax: workerd and node use many threads. Raise it if the journal shows "fork: Resource temporarily unavailable".
+TasksMax=512
+# LimitNOFILE: open files and sockets. SQLite files, logs and client connections count.
+LimitNOFILE=16384
+
+# ---- Hardening ------------------------------------------------------------------------------------
+NoNewPrivileges=true
+PrivateTmp=true
+# strict: the whole file system is read-only for this service, except the paths below.
+ProtectSystem=strict
+# Writable: releases and the pnpm store (/opt/wasl), the databases (/var/lib/wasl), and the wasl home
+# (wrangler and corepack write caches there). Backups are NOT writable by the service.
+ReadWritePaths=/opt/wasl /var/lib/wasl /home/wasl
+# read-only keeps /home visible so /home/wasl works. "true" hides /home; try it only after a staging test.
+ProtectHome=read-only
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+SystemCallArchitectures=native
+# The service listens on 127.0.0.1 and calls out over the network.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+# MemoryDenyWriteExecute is NOT set: the V8 engine inside workerd needs to write executable memory.
+
+[Install]
+WantedBy=multi-user.target

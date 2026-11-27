@@ -1,0 +1,14 @@
+# EXAMPLE ONLY (OPS-5). Not installed, DISABLED. Pairs with offbox-backup.service.example.
+# Enable it yourself, only after the owner picks a destination: systemctl enable --now offbox-backup.timer
+# Time: the daily database backup is /etc/cron.daily/wasl-backup (Ubuntu runs cron.daily around 06:25 local time)
+# and the audit export runs at 00:20 UTC. 07:30 UTC leaves room for both. Change it if your server clock or cron.daily differs.
+# Persistent=true runs a missed day after a reboot.
+[Unit]
+Description=Daily off-box backup copy
+
+[Timer]
+OnCalendar=*-*-* 07:30:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target
