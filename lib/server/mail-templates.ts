@@ -72,7 +72,7 @@ export function renderMail(kind: MailKind, lang: MailLang, v: { link: string; na
     `<!doctype html><html lang="${lang}" dir="${dir}"><head><meta charset="utf-8"><title>${escapeHtml(c.subject)}</title></head>` +
     `<body dir="${dir}" style="margin:0;padding:24px;font-family:Tahoma,Arial,sans-serif;color:#111;background:#fff;text-align:${align}">` +
     `<div dir="${dir}" style="max-width:520px;margin:0 auto">` +
-    (v.name ? `<p>${escapeHtml(c.hi(NAME_MARK)).replace(NAME_MARK, `<bdi>${escapeHtml(v.name)}</bdi>`)}</p>` : '') +
+    (v.name ? `<p>${escapeHtml(c.hi(NAME_MARK)).replace(NAME_MARK, () => `<bdi>${escapeHtml(v.name ?? "")}</bdi>`)}</p>` : '') +
     `<p>${escapeHtml(c.lead)}</p>` +
     `<p><a href="${link}" style="display:inline-block;padding:10px 18px;background:#111;color:#fff;text-decoration:none;border-radius:6px">${escapeHtml(c.cta)}</a></p>` +
     `<p dir="ltr" style="font-size:14px;text-align:left;word-break:break-all">${link}</p>` +
