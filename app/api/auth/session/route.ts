@@ -16,10 +16,10 @@ export const dynamic = 'force-dynamic';
 export const GET = handle(async request => {
   const peek = new URL(request.url).searchParams.get('peek') === '1';
   const p = await getPrincipal(request, { peek });
-  let terms: { termsUpdateRequired: boolean; currentTermsVersion: string } | null = null;
+  let terms: { termsUpdateRequired: boolean; termsNeverAccepted: boolean; currentTermsVersion: string } | null = null;
   if (p) {
     const [a] = await getDb().select({ v: accounts.termsVersion }).from(accounts).where(eq(accounts.userId, p.userId)).limit(1);
-    terms = { termsUpdateRequired: termsUpdateRequired(a?.v), currentTermsVersion: TERMS_VERSION };
+    terms = { termsUpdateRequired: termsUpdateRequired(a?.v), termsNeverAccepted: !a?.v, currentTermsVersion: TERMS_VERSION };
   }
   return json({
     user: p ? publicUser(p) : null,

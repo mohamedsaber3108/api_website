@@ -14,7 +14,7 @@ afterAll(async () => { await h.dispose(); });
 type Handler = (r: Request, c: { params: Promise<Record<string, string>> }) => Promise<Response>;
 const ctx = { params: Promise.resolve({}) };
 const getSession = async (cookie?: string) => (await (session.GET as Handler)(req('/api/auth/session', { cookie }), ctx)).json();
-const post = (cookie?: string, origin = true) => (accept.POST as Handler)(req('/api/auth/accept-terms', { method: 'POST', cookie, body: {}, origin }), ctx);
+const post = (cookie?: string, origin = true, body: unknown = { version: TERMS_VERSION }) => (accept.POST as Handler)(req('/api/auth/accept-terms', { method: 'POST', cookie, body, origin }), ctx);
 const setVersion = (userId: string, v: string | null) => getDb().update(accounts).set({ termsVersion: v }).where(eq(accounts.userId, userId));
 const rowOf = async (userId: string) => (await getDb().select().from(accounts).where(eq(accounts.userId, userId)))[0];
 
@@ -84,5 +84,34 @@ describe('POST /api/auth/accept-terms', () => {
     expect(second.termsAcceptedAt).toBe(first.termsAcceptedAt);
     const rows = (await getDb().select().from(auditLogs).where(eq(auditLogs.actorId, u.userId))).filter(r => r.action === 'auth.terms_accepted');
     expect(rows).toHaveLength(1);
+  });
+});
+
+describe('review round 1 fixes', () => {
+  it('session marks a null version as never accepted, and an older one as not', async () => {
+    const u = await makeUser();
+    await setVersion(u.userId, null);
+    expect(await getSession(u.cookie)).toMatchObject({ termsUpdateRequired: true, termsNeverAccepted: true });
+    await setVersion(u.userId, '2026-01-01');
+    expect(await getSession(u.cookie)).toMatchObject({ termsUpdateRequired: true, termsNeverAccepted: false });
+  });
+  it('accepting from a null version records the current one', async () => {
+    const u = await makeUser();
+    await setVersion(u.userId, null);
+    expect((await post(u.cookie)).status).toBe(200);
+    expect((await rowOf(u.userId)).termsVersion).toBe(TERMS_VERSION);
+  });
+  it('refuses a version the user was not shown with 409 and changes nothing', async () => {
+    const u = await makeUser();
+    await setVersion(u.userId, '2026-01-01');
+    const res = await post(u.cookie, true, { version: '2025-01-01' });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ code: 'terms_version_changed', currentTermsVersion: TERMS_VERSION });
+    expect((await rowOf(u.userId)).termsVersion).toBe('2026-01-01');
+  });
+  it('rate limits at 20 calls an hour per user', async () => {
+    const u = await makeUser();
+    for (let i = 0; i < 20; i++) expect((await post(u.cookie)).status).toBe(200);
+    expect((await post(u.cookie)).status).toBe(429);
   });
 });

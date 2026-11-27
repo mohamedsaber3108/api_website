@@ -7,7 +7,6 @@ type Lang = 'ar' | 'en';
 type Section = { h: string; p: string[] };
 type Doc = { title: string; intro: string; sections: Section[] };
 
-
 const COMPANY = '[COMPANY LEGAL NAME]';
 const CONTACT = '[legal@your-domain]';
 
