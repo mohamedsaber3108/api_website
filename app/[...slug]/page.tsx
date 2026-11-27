@@ -1,5 +1,6 @@
 import WaslApp from "../wasl-app";
+import { serverLang } from "../lang-server";
 
-export default function ProductRoute() {
-  return <WaslApp />;
+export default async function ProductRoute() {
+  return <WaslApp initialLang={await serverLang()} />;
 }
