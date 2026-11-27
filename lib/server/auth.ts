@@ -1,7 +1,7 @@
 import { and, eq, gt, isNull } from 'drizzle-orm';
 import { getDb } from '../../db';
 import { accounts, authTokens, sessions } from '../../db/schema';
-import { audit } from './audit';
+import { audit, auditDeniedOnce } from './audit';
 import { adminEmails, adminEmailsBreakGlass, features, SESSION_COOKIE, SESSION_TTL_MS } from './config';
 import { randomHex, sha256Hex } from './crypto';
 import { clientIp, cookieHeader, HttpError, readCookie } from './http';
@@ -129,9 +129,23 @@ export async function requireUser(request: Request): Promise<Principal> {
 export async function requireRole(request: Request, ...roles: Role[]): Promise<Principal> {
   const p = await requireUser(request);
   // super_admin passes wherever `admin` is allowed.
-  if (!roles.includes(p.role) && !(p.role === 'super_admin' && roles.includes('admin'))) throw new HttpError(403, 'Forbidden', 'forbidden');
+  // Audit target = route pattern, not the raw path: a new id in the URL must not make a new throttle key (review N1).
+  const path = new URL(request.url).pathname.replace(/^(\/api\/admin\/(?:users|requests|tickets))\/[^/]+/, '$1/:id').slice(0, 120);
+  if (!roles.includes(p.role) && !(p.role === 'super_admin' && roles.includes('admin'))) {
+    // A signed-in person tried an admin or staff route they may not use. (Not signed in = 401, not written: no actor to record.)
+    // One row per actor, route and reason per 60 seconds, so a customer hammering an admin URL cannot flood the log.
+    await auditDeniedOnce(request, p.userId, 'auth.admin_denied', { type: 'route', id: path }, 'role_not_allowed', { actorRole: p.role });
+    throw new HttpError(403, 'Forbidden', 'forbidden');
+  }
   // Admins also need an MFA-verified session. Support staff are not required yet (SEC-3b).
-  if (isAdminRole(p.role)) await assertAdminMfa(p);
+  if (isAdminRole(p.role)) {
+    try {
+      await assertAdminMfa(p);
+    } catch (e) {
+      if (e instanceof HttpError && e.code === 'mfa_required') await auditDeniedOnce(request, p.userId, 'auth.admin_denied', { type: 'route', id: path }, 'mfa_required', { actorRole: p.role });
+      throw e;
+    }
+  }
   if (p.breakGlass) await audit(request, p.userId, 'auth.break_glass_used', { type: 'account', id: p.userId }, { method: request.method, path: new URL(request.url).pathname });
   return p;
 }

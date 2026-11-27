@@ -13,4 +13,12 @@ describe('approval error codes', () => {
     expect(approvalCodeMessage('target_inactive', (_a, e) => e)).toBe('You cannot promote a suspended or deleted account.');
     expect(approvalCodeMessage('other', (a) => a)).toBeNull();
   });
+
+  it('audit_unavailable (503) is shown in the page language', () => {
+    const ar = approvalCodeMessage('audit_unavailable', (a) => a) as string;
+    const en = approvalCodeMessage('audit_unavailable', (_a, e) => e) as string;
+    expect(ar).toBe('سجل التدقيق غير متاح، لذلك لم يُنفَّذ الإجراء. حاول لاحقًا.');
+    expect(ar).not.toMatch(/[A-Za-z]/);
+    expect(en).toBe('The audit log is unavailable, so this action was not done. Try again later.');
+  });
 });
