@@ -4,7 +4,8 @@ import { getDb } from '../db';
 import { accounts, auditLogs } from '../db/schema';
 import * as accept from '../app/api/auth/accept-terms/route';
 import * as session from '../app/api/auth/session/route';
-import { LEGAL_VERSIONS, TERMS_VERSION, termsUpdateRequired } from '../lib/legal-versions';
+import { LEGAL_HISTORY, LEGAL_VERSIONS, TERMS_VERSION, findLegalVersion, termsUpdateRequired } from '../lib/legal-versions';
+import { legalDoc } from '../components/legal';
 import { makeUser, req, startDb } from './helpers/db';
 
 let h: Awaited<ReturnType<typeof startDb>>;
@@ -30,6 +31,27 @@ describe('legal version module', () => {
     expect(termsUpdateRequired(null)).toBe(true);
     expect(termsUpdateRequired('2026-01-01')).toBe(true);
     expect(termsUpdateRequired(TERMS_VERSION)).toBe(false);
+  });
+});
+
+describe('legal history', () => {
+  const pages = ['terms', 'privacy', 'refund', 'acceptable-use'] as const;
+  it('LEGAL_VERSIONS is the first history entry of each page', () => {
+    for (const p of pages) expect(LEGAL_VERSIONS[p]).toBe(LEGAL_HISTORY[p][0]);
+  });
+  it('every superseded version has archived text in both languages', () => {
+    for (const p of pages) for (const e of LEGAL_HISTORY[p].slice(1)) for (const l of ['ar', 'en'] as const) expect(legalDoc(p, e.version, l)).not.toBeNull();
+  });
+  it('a page with more than one entry has a non-empty changes summary on the newest', () => {
+    for (const p of pages) if (LEGAL_HISTORY[p].length > 1) {
+      const c = LEGAL_HISTORY[p][0].changes;
+      expect(c?.ar?.trim()).toBeTruthy();
+      expect(c?.en?.trim()).toBeTruthy();
+    }
+  });
+  it('findLegalVersion finds a known version and not an unknown one', () => {
+    expect(findLegalVersion('terms', TERMS_VERSION)).toBe(LEGAL_HISTORY.terms[0]);
+    expect(findLegalVersion('terms', '1999-01-01')).toBeUndefined();
   });
 });
 
