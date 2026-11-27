@@ -1,0 +1,15 @@
+# EXAMPLE ONLY (AUD-2). Not installed, not run by any script in this repo.
+# Copy to /etc/systemd/system/ yourself after the owner picks the paths.
+# The signing key lives in /etc/wasl/audit-export.env (mode 600, owner root), one line: AUDIT_EXPORT_HMAC_KEY=<at least 32 random characters>
+# That file is created by a person on the server. It is never in git and never in a chat.
+[Unit]
+Description=Write the daily signed audit export
+
+[Service]
+Type=oneshot
+User=wasl
+EnvironmentFile=/etc/wasl/audit-export.env
+Environment=AUDIT_DB_PATH=/var/lib/wasl/app.sqlite
+Environment=AUDIT_EXPORT_DIR=/var/backups/wasl/audit-exports
+Environment=AUDIT_APP_DIR=/opt/wasl
+ExecStart=/usr/bin/bash /opt/wasl/deploy/export-audit-daily.sh

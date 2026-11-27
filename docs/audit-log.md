@@ -45,6 +45,18 @@ Example systemd files (not installed, not run): `deploy/verify-audit.service.exa
 ## Off-box export hook (OFF by default)
 `node scripts/export-audit.mjs <copy.sqlite> --out <file.jsonl> [--after <seq>]` writes chained rows after `seq` and a last `{"tail":{seq,hash}}` line. Without `--out` it does nothing. No destination is built in and nothing is scheduled: where the file goes and how often (daily) is the owner's decision.
 
+## Daily signed export (AUD-2)
+Tamper-evident only. The off-box copy is not done yet, so someone who holds the key and the box can still rewrite both the log and the files.
+`node scripts/export-audit-daily.mjs <copy.sqlite> --dir <folder> [--day YYYY-MM-DD] [--key-env NAME] [--keep-days 365]` writes `<folder>/audit-<day>.jsonl` for one UTC day (default: yesterday; today is refused). Run it on a COPY.
+- File: a header line (day, row count, first and last seq, the hash before the first row, the tail hash), one line per chained row with its hash, and a last line `{"hmac": ...}` (HMAC-SHA256 over all earlier lines).
+- Key: read from the environment variable named by `--key-env` (default `AUDIT_EXPORT_HMAC_KEY`, at least 32 characters). Only the name is ever used in messages. The value is never printed or stored in the repo.
+- Idempotent: if the day's file exists it is skipped. The same rows give the same bytes (no "made at" time inside).
+- It refuses to export (exit 1) when the chain on the copy is broken.
+- Retention: after a run, files named exactly `audit-YYYY-MM-DD.jsonl` that are plain files inside the export folder and older than 365 days are deleted. Nothing outside the folder, no other names, no links.
+- Verify: `node scripts/verify-audit-export.mjs <file> [--previous <file of the day before>] [--key-env NAME]`. Exit 0 intact, 1 tampered, 2 usage error. It checks the signature, each row's hash and link, and with `--previous` that the day continues the day before.
+- Example files, never installed or run here: `deploy/export-audit-daily.sh`, `deploy/export-audit.service.example`, `deploy/export-audit.timer.example` (00:20 UTC). The key goes in `/etc/wasl/audit-export.env`, created by a person on the server.
+- Limits: a missed day is not back-filled by the timer (run the script with `--day`); rows without a hash are only counted in the header (`unchainedRows`); a day with no rows cannot be linked to the day before.
+
 ## Rollback
 The migration only adds nullable columns and indexes. Old code ignores the new columns, so rolling the code back needs no database change. Rows written by new code keep their extra columns and stay valid. Do not remove the columns while new code could still run.
 </text>
