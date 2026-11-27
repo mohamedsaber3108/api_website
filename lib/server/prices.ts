@@ -30,7 +30,10 @@ export function defaultPricePoints(): PricePoint[] {
 
 const sortPoints = (a: PricePoint, b: PricePoint) => a.credits - b.credits || a.packageId.localeCompare(b.packageId) || a.currency.localeCompare(b.currency);
 
-/** Active price points from the table, or the defaults when the table is empty. */
+/**
+ * Active price points from the table, or the defaults when the table is empty.
+ * Note: if someone deletes every row by hand, the USD code defaults come back. To stop selling, set rows inactive instead.
+ */
 export async function listActivePricePoints(): Promise<PricePoint[]> {
   const rows = await getDb().select().from(pricePoints).orderBy(asc(pricePoints.credits), asc(pricePoints.packageId), asc(pricePoints.currency));
   if (rows.length === 0) return defaultPricePoints();

@@ -12,7 +12,7 @@ export const stubProvider: PaymentProvider = {
   supportsCurrency: () => true,
   async createCheckout(input) {
     const id = `stub_cs_${crypto.randomUUID().replace(/-/g, '')}`;
-    return { id, url: `${input.origin}/billing/stub-checkout?session=${encodeURIComponent(id)}&currency=${encodeURIComponent(input.currency)}` };
+    return { id, url: `${input.origin}/billing/stub-checkout?session=${encodeURIComponent(id)}` };
   },
   verifyWebhook: async () => false,
   parseEvent: () => null,
