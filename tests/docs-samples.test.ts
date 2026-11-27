@@ -81,6 +81,25 @@ describe('FEAT-1 error codes', () => {
     for (const code of found) expect(documented, `undocumented code ${code}`).toContain(code);
   });
 
+  it('every literal status and code pair in the gateway matches the documented status (PR 33 review)', () => {
+    const sources = [read('lib/server/gateway.ts'), read('app/api/v1/chat/completions/route.ts')].join('\n');
+    const pairs = [...sources.matchAll(/new GatewayError\((\d{3}), '([a-z_]+)'/g)].map(m => [Number(m[1]), m[2]] as const);
+    expect(pairs.length).toBeGreaterThan(10);
+    for (const [status, code] of pairs) {
+      const docs = ERROR_CODES.filter(c => c.code === code).map(c => c.status);
+      expect(docs, code + ' documented with status ' + status).toContain(status);
+    }
+    // The upstream_unreachable status is chosen at run time (504 on timeout, else 502): both must be documented.
+    const unreachable = ERROR_CODES.filter(c => c.code === 'upstream_unreachable').map(c => c.status);
+    expect(unreachable).toEqual(expect.arrayContaining([502, 504]));
+  });
+
+  it('the /models 429 has the flat public body and a Retry-After header', () => {
+    const r = spec.paths['/models'].get.responses['429'] as { headers?: Record<string, unknown>; content?: Record<string, { schema: { properties: Record<string, unknown> } }> };
+    expect(r.headers).toHaveProperty('Retry-After');
+    expect(Object.keys(r.content!['application/json'].schema.properties).sort()).toEqual(['code', 'error', 'retry_after']);
+  });
+
   it('every documented code exists in the source', () => {
     const sources = [read('lib/server/gateway.ts'), read('app/api/v1/chat/completions/route.ts'), read('lib/server/ratelimit.ts')].join('\n');
     for (const c of ERROR_CODES) expect(sources, c.code).toContain(`'${c.code}'`);

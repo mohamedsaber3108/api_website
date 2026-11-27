@@ -13,6 +13,18 @@ const errFor = (endpoint: OpenApiEndpoint) => {
   return responses;
 };
 
+/** /models is a public endpoint: its 429 comes from publicLimit (lib/server/ratelimit.ts) with a FLAT body, not the nested Error. */
+const errForModels = () => {
+  const r = errFor('models') as Record<string, Record<string, unknown>>;
+  if (r['429']) r['429'] = {
+    description: 'Rate limited. Public endpoint: flat body, not the nested error object.',
+    headers: { 'Retry-After': { description: 'Seconds to wait', schema: { type: 'integer' } } },
+    content: { 'application/json': { schema: { type: 'object', required: ['error', 'code', 'retry_after'], properties: { error: { type: 'string' }, code: { const: 'rate_limited' }, retry_after: { type: 'integer' } } } } },
+    'x-error-codes': r['429']['x-error-codes'],
+  };
+  return r;
+};
+
 function spec(origin: string) {
   return {
     openapi: '3.1.0',
@@ -49,7 +61,7 @@ function spec(origin: string) {
       },
       '/balance': { get: { summary: 'Current credit balance', security: [{ waslKey: [] }], description: 'Requires the "usage" scope. balance_usd is the ledger balance; available_usd is the balance minus open (unexpired) holds for running requests, which is what a new call may spend.', responses: { '200': { description: 'Balance', content: { 'application/json': { schema: { type: 'object', properties: { balance_usd: { type: 'number' }, available_usd: { type: 'number', description: 'Balance minus open holds' }, available_micro_usd: { type: 'integer' }, held_micro_usd: { type: 'integer', description: 'Sum of open, unexpired holds' }, currency: { const: 'USD' } } } } } }, ...errFor('balance') } } },
       '/usage': { get: { summary: 'Usage summary', security: [{ waslKey: [] }], description: 'Requires the "usage" scope.', parameters: [{ name: 'days', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 365, default: 30 } }], responses: { '200': { description: 'Totals, daily buckets, and per-model breakdown' }, ...errFor('usage') } } },
-      '/models': { get: { summary: 'List catalog models', parameters: [{ name: 'q', in: 'query', schema: { type: 'string' } }, { name: 'provider', in: 'query', schema: { type: 'string' } }, { name: 'offset', in: 'query', schema: { type: 'integer', default: 0 } }, { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 100, default: 50 } }], responses: { '200': { description: 'Models; prices are USD per 1M tokens' }, ...errFor('models') } } },
+      '/models': { get: { summary: 'List catalog models', parameters: [{ name: 'q', in: 'query', schema: { type: 'string' } }, { name: 'provider', in: 'query', schema: { type: 'string' } }, { name: 'offset', in: 'query', schema: { type: 'integer', default: 0 } }, { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 100, default: 50 } }], responses: { '200': { description: 'Models; prices are USD per 1M tokens' }, ...errForModels() } } },
       '/models/{id}': { get: { summary: 'Get one model', parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' }, example: 'anthropic/claude-sonnet-5.5' }], responses: { '200': { description: 'Model' }, '404': { description: 'Not found' } } } },
       '/pricing/estimate': { get: { summary: 'Estimate cost (display only, excludes platform margin)', parameters: ['model', 'input_tokens', 'output_tokens', 'requests', 'currency'].map(name => ({ name, in: 'query', required: name === 'model', schema: { type: name === 'model' || name === 'currency' ? 'string' : 'integer' } })), responses: { '200': { description: 'Estimate' }, '400': { description: 'Invalid parameters' }, '404': { description: 'Model not found' } } } },
       '/health': { get: { summary: 'Live component checks', responses: { '200': { description: 'Healthy' }, '503': { description: 'Degraded (database unavailable)' } } } },
