@@ -52,6 +52,12 @@ Tamper-evident only. The off-box copy is not done yet, so someone who holds the 
 - Key: read from the environment variable named by `--key-env` (default `AUDIT_EXPORT_HMAC_KEY`, at least 32 characters). Only the name is ever used in messages. The value is never printed or stored in the repo.
 - Idempotent: if the day's file exists it is skipped. The same rows give the same bytes (no "made at" time inside).
 - It refuses to export (exit 1) when the chain on the copy is broken.
+- Days are cut by seq, not by created_at alone: a row's day is the latest created_at seen up to its seq. A row stamped just before midnight but chained after it lands in the later day, so there is no seq gap between files. Rows without a seq are only counted (`unchainedRows`).
+- The text is checked with the verifier before it is renamed into place. If it does not verify, exit 1 and nothing is written.
+- Verify also checks that the file name is `audit-<day in header>.jsonl`.
+- The example script (`deploy/export-audit-daily.sh`) keeps the database copy in its own mode-700 folder, with umask 077, and always removes it. The service example uses a separate user, `PrivateTmp`, `NoNewPrivileges`, `ProtectSystem=strict` and `ReadWritePaths`.
+- A failed run is not silent when you add the `wasl-audit-alert.service` named by `OnFailure=` in the service example. That unit is yours: it calls the AUD-1 alert hook.
+- Limit: a row committed after the copy was taken, with a time inside an already exported day, is not in that day's file. The next file then fails the `--previous` check, which shows the problem.
 - Retention: after a run, files named exactly `audit-YYYY-MM-DD.jsonl` that are plain files inside the export folder and older than 365 days are deleted. Nothing outside the folder, no other names, no links.
 - Verify: `node scripts/verify-audit-export.mjs <file> [--previous <file of the day before>] [--key-env NAME]`. Exit 0 intact, 1 tampered, 2 usage error. It checks the signature, each row's hash and link, and with `--previous` that the day continues the day before.
 - Example files, never installed or run here: `deploy/export-audit-daily.sh`, `deploy/export-audit.service.example`, `deploy/export-audit.timer.example` (00:20 UTC). The key goes in `/etc/wasl/audit-export.env`, created by a person on the server.

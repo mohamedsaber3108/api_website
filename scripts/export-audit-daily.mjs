@@ -7,12 +7,13 @@
 // Refuses to export (exit 1) if the hash chain on the copy is broken, and refuses today or a future day (the day is not over).
 // After a successful run it deletes export files older than --keep-days (default 365) INSIDE the export folder only:
 // only plain files named audit-YYYY-MM-DD.jsonl, never a link, never another name, never another folder.
-// Exit: 0 written or skipped, 1 chain broken, 2 usage or read error. Run it on a COPY, never on the live database.
+// The text is verified (verifyExport) before it is renamed into place; if it does not verify, exit 1 and nothing is written.
+// Exit: 0 written or skipped, 1 chain broken or export did not verify, 2 usage or read error. Run it on a COPY, never on the live database.
 import { existsSync, lstatSync, mkdirSync, readdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { verifyChain } from '../lib/audit-chain.mjs';
-import { buildExport, expiredNames, fileNameForDay, readKey } from '../lib/audit-export.mjs';
+import { buildExport, expiredNames, fileNameForDay, readKey, verifyExport } from '../lib/audit-export.mjs';
 
 const args = process.argv.slice(2);
 const opt = n => { const i = args.indexOf(n); return i >= 0 ? args[i + 1] : undefined; };
@@ -48,6 +49,8 @@ if (existsSync(target)) {
   const chain = await verifyChain(rows);
   if (!chain.ok) fail(`chain is BROKEN at seq ${chain.firstBroken.seq}: ${chain.firstBroken.reason}. Nothing was exported.`, 1);
   const text = buildExport(rows, day, key);
+  const own = await verifyExport(text, key, undefined, fileNameForDay(day));
+  if (!own.ok) fail(`the export did not verify itself: ${own.reason}. Nothing was written.`, 1);
   const tmp = `${target}.tmp`;
   writeFileSync(tmp, text, { flag: 'w', mode: 0o600 });
   renameSync(tmp, target);

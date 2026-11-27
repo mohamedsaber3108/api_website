@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { createHmac } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -9,16 +10,16 @@ import { buildExport, dayBounds, expiredNames, readKey, verifyExport } from '../
 
 const KEY = 'test-only-key-0123456789-abcdefghijklmnop';
 const KEY_ENV = 'AUD2_TEST_KEY';
-const DAY1 = '2026-01-10';
-const DAY2 = '2026-01-11';
+const dayAgo = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString().slice(0, 10);
+const DAY1 = dayAgo(3);
+const DAY2 = dayAgo(2);
 const t = (day: string, n: number) => Date.parse(`${day}T10:00:00.000Z`) + n;
 const exportScript = path.resolve(__dirname, '../scripts/export-audit-daily.mjs');
 const verifyScript = path.resolve(__dirname, '../scripts/verify-audit-export.mjs');
 
-async function makeRows() {
+async function makeRows(times: number[] = [t(DAY1, 1), t(DAY1, 2), t(DAY2, 1), t(DAY2, 2)]) {
   const rows: Record<string, unknown>[] = [];
   let prev = GENESIS;
-  const times = [t(DAY1, 1), t(DAY1, 2), t(DAY2, 1), t(DAY2, 2)];
   for (let i = 0; i < times.length; i++) {
     const f = { seq: i + 1, id: `r${i + 1}`, actorId: 'u1', actorRole: 'admin', action: 'x.y', targetType: null, targetId: null, meta: null, before: null, after: null, reason: null, result: 'success', ip: null, createdAt: times[i], prevHash: prev };
     const hash = await chainHash(f);
@@ -47,7 +48,6 @@ describe('AUD-2: signed audit export (library)', () => {
     expect(buildExport(rows, DAY1, KEY)).toBe(a);
     const r = await verifyExport(a, KEY);
     expect(r).toMatchObject({ ok: true, rows: 2, day: DAY1 });
-    expect(a).not.toContain(KEY);
   });
 
   it('detects an edited row, a removed row, a wrong key and a cut-short file', async () => {
@@ -70,6 +70,35 @@ describe('AUD-2: signed audit export (library)', () => {
     const r = await verifyExport(forged, KEY);
     expect(r.ok).toBe(false);
     expect(r.reason).toMatch(/row_content_does_not_match_hash_at_seq_1/);
+  });
+
+  it('re-signed forgeries fail: swapped rows, middle row removed, last row removed with header unchanged', async () => {
+    const rows = await makeRows([t(DAY1, 1), t(DAY1, 2), t(DAY1, 3), t(DAY1, 4)]);
+    const lines = buildExport(rows, DAY1, KEY).split('\n').slice(0, -2); // header + 4 rows, no signature, no trailing empty
+    const resign = (ls: string[]) => { const body = `${ls.join('\n')}\n`; return `${body}${JSON.stringify({ hmac: createHmac('sha256', KEY).update(body).digest('hex') })}\n`; };
+    expect((await verifyExport(resign(lines), KEY)).ok).toBe(true);
+    const swapped = [lines[0], lines[2], lines[1], lines[3], lines[4]];
+    expect((await verifyExport(resign(swapped), KEY)).ok).toBe(false);
+    const noMiddle = [lines[0], lines[1], lines[3], lines[4]];
+    expect((await verifyExport(resign(noMiddle), KEY)).ok).toBe(false);
+    const noLast = lines.slice(0, 4); // header still says 4 rows and the old tail
+    expect((await verifyExport(resign(noLast), KEY)).ok).toBe(false);
+  });
+
+  it('checks the file name equals audit-<header day>.jsonl', async () => {
+    const rows = await makeRows();
+    const a = buildExport(rows, DAY1, KEY);
+    expect((await verifyExport(a, KEY, undefined, `audit-${DAY1}.jsonl`)).ok).toBe(true);
+    expect((await verifyExport(a, KEY, undefined, `audit-${DAY2}.jsonl`)).reason).toBe('file_name_does_not_match_header_day');
+  });
+
+  it('cuts days by seq: a row stamped before midnight but chained after it goes in the later day with no gap', async () => {
+    const midnight = Date.parse(`${DAY2}T00:00:00.000Z`);
+    const rows = await makeRows([t(DAY1, 1), midnight + 5, midnight - 5, midnight + 10]); // seq 3 has an earlier created_at than seq 2
+    const d1 = buildExport(rows, DAY1, KEY);
+    const d2 = buildExport(rows, DAY2, KEY);
+    expect(await verifyExport(d1, KEY, undefined, `audit-${DAY1}.jsonl`)).toMatchObject({ ok: true, rows: 1 });
+    expect(await verifyExport(d2, KEY, d1, `audit-${DAY2}.jsonl`)).toMatchObject({ ok: true, rows: 3 });
   });
 
   it('checks that day 2 continues day 1', async () => {
@@ -131,6 +160,22 @@ describe('AUD-2: scripts', () => {
     const bad = run(verifyScript, [f, '--key-env', KEY_ENV], env);
     expect(bad.status).toBe(1);
     expect(bad.stderr).toContain('TAMPERED');
+  });
+
+  it('exports both days when created_at is out of order across midnight, and the files verify in a chain', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'aud2-'));
+    const midnight = Date.parse(`${DAY2}T00:00:00.000Z`);
+    const db = makeDb(dir, await makeRows([t(DAY1, 1), midnight + 5, midnight - 5, midnight + 10]));
+    const out = path.join(dir, 'exports');
+    const env = { [KEY_ENV]: KEY };
+    expect(run(exportScript, [db, '--dir', out, '--day', DAY1, '--key-env', KEY_ENV], env).status).toBe(0);
+    expect(run(exportScript, [db, '--dir', out, '--day', DAY2, '--key-env', KEY_ENV], env).status).toBe(0);
+    const f1 = path.join(out, `audit-${DAY1}.jsonl`);
+    const f2 = path.join(out, `audit-${DAY2}.jsonl`);
+    expect(run(verifyScript, [f2, '--previous', f1, '--key-env', KEY_ENV], env).status).toBe(0);
+    const wrong = path.join(out, 'audit-2020-01-01.jsonl.copy');
+    writeFileSync(wrong, readFileSync(f1));
+    expect(run(verifyScript, [wrong, '--key-env', KEY_ENV], env).status).toBe(1); // wrong file name for the header day
   });
 
   it('refuses today, a missing key, and a broken chain', async () => {

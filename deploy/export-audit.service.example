@@ -2,14 +2,26 @@
 # Copy to /etc/systemd/system/ yourself after the owner picks the paths.
 # The signing key lives in /etc/wasl/audit-export.env (mode 600, owner root), one line: AUDIT_EXPORT_HMAC_KEY=<at least 32 random characters>
 # That file is created by a person on the server. It is never in git and never in a chat.
+# Create a separate user first (for example: wasl-audit). It must be able to READ the live database and WRITE the export folder only.
+# A failed run must not be silent: OnFailure starts wasl-audit-alert.service, a unit the owner writes that calls the AUD-1 alert hook
+# (AUDIT_ALERT_COMMAND or AUDIT_ALERT_WEBHOOK_URL, see docs/audit-log.md). Without that unit, failures only show in the journal.
 [Unit]
 Description=Write the daily signed audit export
+OnFailure=wasl-audit-alert.service
 
 [Service]
 Type=oneshot
-User=wasl
+User=wasl-audit
 EnvironmentFile=/etc/wasl/audit-export.env
 Environment=AUDIT_DB_PATH=/var/lib/wasl/app.sqlite
 Environment=AUDIT_EXPORT_DIR=/var/backups/wasl/audit-exports
 Environment=AUDIT_APP_DIR=/opt/wasl
 ExecStart=/usr/bin/bash /opt/wasl/deploy/export-audit-daily.sh
+# Hardening. PrivateTmp gives the database copy its own temp folder that no other user can see.
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/backups/wasl/audit-exports
+# sqlite3 .backup needs to read the live database and may need its folder writable for the journal; add that folder here only if the backup fails:
+# ReadWritePaths=/var/lib/wasl
