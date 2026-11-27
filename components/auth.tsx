@@ -15,12 +15,19 @@ export default function AuthPage({ mode, lang, session, go, onChanged }: Props) 
   const [busy, setBusy] = useState(mode === 'verify-email' && !!token);
   const [error, setError] = useState('');
   const [info, setInfo] = useState('');
+  const [credit, setCredit] = useState('');
   const [devToken, setDevToken] = useState('');
+
+  // Says if the sign-up credit was added. On a password reset the "not added" case is the normal one, so it stays silent there.
+  const bonusText = (bonus: boolean | null | undefined, showNo: boolean) =>
+    bonus === true ? tr('تمت إضافة رصيد التسجيل إلى حسابك.', 'Your sign-up credit was added to your account.')
+    : bonus === false && showNo ? tr('لم تتم إضافة رصيد التسجيل: يُمنح مرة واحدة لكل عنوان بريد، وقد استُخدم لهذا العنوان من قبل.', 'No sign-up credit was added: it is given once per email address, and this address already received it.')
+    : '';
 
   useEffect(() => {
     if (mode !== 'verify-email' || !token) return;
-    api('/api/auth/verify-email', { method: 'POST', body: { token } })
-      .then(async () => { setInfo(tr('تم تأكيد بريدك الإلكتروني.', 'Your email is verified.')); await onChanged(); })
+    api<{ bonus?: boolean | null }>('/api/auth/verify-email', { method: 'POST', body: { token } })
+      .then(async r => { setInfo(tr('تم تأكيد بريدك الإلكتروني.', 'Your email is verified.')); setCredit(bonusText(r.bonus, true)); await onChanged(); })
       .catch(e => setError(errorMessage(e)))
       .finally(() => setBusy(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -42,7 +49,8 @@ export default function AuthPage({ mode, lang, session, go, onChanged }: Props) 
         setInfo(tr('إذا كان البريد مسجلًا فسنرسل رابط إعادة التعيين.', 'If that email has an account, a reset link is on its way.'));
         if (r.dev_reset_token) setDevToken(r.dev_reset_token);
       } else if (mode === 'reset-password') {
-        await api('/api/auth/reset-password', { method: 'POST', body: { token, password: form.password } });
+        const r = await api<{ bonus?: boolean | null }>('/api/auth/reset-password', { method: 'POST', body: { token, password: form.password } });
+        setCredit(bonusText(r.bonus, false));
         setInfo(tr('تم تغيير كلمة المرور. سجّل الدخول بها الآن.', 'Password changed. You can sign in now.'));
       }
     } catch (err) { setError(errorMessage(err)); } finally { setBusy(false); }
@@ -61,9 +69,9 @@ export default function AuthPage({ mode, lang, session, go, onChanged }: Props) 
   return <main className="inner-page"><section className="page-heading section"><span className="section-kicker">WASL / ACCOUNT</span><h1>{tr(...titles[mode])}</h1><div className="page-heading-art"><Icon /></div></section>
     <section className="section auth-wrap"><div className="auth-card">
       {alreadyIn ? <div className="auth-done"><CheckCircle2 size={26} /><p>{tr('أنت مسجّل الدخول بالفعل.', 'You are already signed in.')}</p><button className="button-primary" onClick={() => go('dashboard')}>{tr('افتح لوحة التحكم', 'Open dashboard')}</button></div>
-      : mode === 'verify-email' ? <div className="auth-done">{busy && <p>{tr('جارٍ التحقق…', 'Verifying…')}</p>}{!token && <p className="live-error">{tr('رابط غير صالح.', 'Invalid link.')}</p>}{info && <><CheckCircle2 size={26} /><p>{info}</p><button className="button-primary" onClick={() => go('dashboard')}>{tr('لوحة التحكم', 'Dashboard')}</button></>}{error && <p className="live-error" role="alert">{error}</p>}</div>
+      : mode === 'verify-email' ? <div className="auth-done">{busy && <p>{tr('جارٍ التحقق…', 'Verifying…')}</p>}{!token && <p className="live-error">{tr('رابط غير صالح.', 'Invalid link.')}</p>}{info && <><CheckCircle2 size={26} /><p>{info}</p>{credit && <p role="status">{credit}</p>}<button className="button-primary" onClick={() => go('dashboard')}>{tr('لوحة التحكم', 'Dashboard')}</button></>}{error && <p className="live-error" role="alert">{error}</p>}</div>
       : devToken && mode === 'register' ? <div className="auth-done"><CheckCircle2 size={26} /><p>{tr('تم إنشاء الحساب. وضع التطوير: لم يُرسل بريد، استخدم هذا الرابط للتأكيد.', 'Account created. Dev mode: no email was sent, use this link to verify.')}</p><a className="pill-link" href={`/verify-email?token=${devToken}`}>/verify-email?token=…</a></div>
-      : info && mode === 'reset-password' ? <div className="auth-done"><CheckCircle2 size={26} /><p>{info}</p><button className="button-primary" onClick={() => go('login')}>{tr('تسجيل الدخول', 'Sign in')}</button></div>
+      : info && mode === 'reset-password' ? <div className="auth-done"><CheckCircle2 size={26} /><p>{info}</p>{credit && <p role="status">{credit}</p>}<button className="button-primary" onClick={() => go('login')}>{tr('تسجيل الدخول', 'Sign in')}</button></div>
       : <form onSubmit={submit} className="auth-form">
         {mode === 'register' && <label>{tr('الاسم', 'Name')}<input required minLength={2} maxLength={80} autoComplete="name" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} /></label>}
         {mode !== 'reset-password' && <label>{tr('البريد الإلكتروني', 'Email')}<input required type="email" autoComplete="email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} /></label>}

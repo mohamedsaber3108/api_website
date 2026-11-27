@@ -2,7 +2,7 @@
 import { useState } from 'react';
 import { ArrowUpRight, Eye, EyeOff, Send, ShieldCheck, Wallet } from 'lucide-react';
 import type { CatalogModel } from '../lib/catalog';
-import type { SessionInfo } from '../lib/client-api';
+import { rateLimitedText, type SessionInfo } from '../lib/client-api';
 import { creditShortfallFromError, type CreditShortfall } from '../lib/credit-error';
 type Props = { lang: 'ar' | 'en'; models: CatalogModel[]; selected: CatalogModel; session: SessionInfo | null; onSignIn: () => void };
 type Usage = { prompt_tokens?: number; completion_tokens?: number; cost?: number } | null;
@@ -35,6 +35,7 @@ export default function LiveTry({ lang, models, selected, session, onSignIn }: P
       if (activeMode === 'credits') {
         const r = await fetch('/api/account/playground', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: chosen, messages: [{ role: 'user', content: prompt }], max_tokens: 1024 }) });
         const j = (await r.json()) as ChatReply;
+        if (r.status === 429 && r.headers.has('retry-after')) throw new Error(rateLimitedText(Number(r.headers.get('retry-after')), lang));
         if (!r.ok) {
           const s = r.status === 402 ? creditShortfallFromError(lang, j?.error) : null;
           if (s) { setShortfall(s); return; }
@@ -47,6 +48,7 @@ export default function LiveTry({ lang, models, selected, session, onSignIn }: P
       } else {
         const r = await fetch('/api/v1/try', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key.trim()}` }, body: JSON.stringify({ model: chosen, prompt }) });
         const j = (await r.json()) as TryReply;
+        if (r.status === 429 && (j as { code?: string }).code === 'rate_limited') throw new Error(rateLimitedText(Number(r.headers.get('retry-after')), lang));
         if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
         setAnswer(j.answer || (ar ? 'النموذج لم يُرجع نصًا.' : 'The model returned no text.'));
         setUsage(j.usage ?? null);

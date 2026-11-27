@@ -6,8 +6,8 @@ import { audit } from '../../../../lib/server/audit';
 import { features } from '../../../../lib/server/config';
 import { sendEmail } from '../../../../lib/server/email';
 import { fail, handle } from '../../../../lib/server/http';
+import { errText } from '../../../../lib/server/redact';
 import { ledgerInsert } from '../../../../lib/server/ledger';
-import { redactText } from '../../../../lib/server/redact';
 import { verifyStripeSignature } from '../../../../lib/server/stripe';
 import { accounts } from '../../../../db/schema';
 
@@ -85,9 +85,9 @@ export const POST = handle(async request => {
     }
     await db.update(paymentWebhookEvents).set({ processedAt: Date.now(), error: null }).where(eq(paymentWebhookEvents.id, event.id));
   } catch (e) {
-    const message = redactText(e instanceof Error ? e.message : String(e));
+    const message = errText(e);
     await db.update(paymentWebhookEvents).set({ error: message.slice(0, 500) }).where(eq(paymentWebhookEvents.id, event.id));
-    console.error('webhook processing failed', event.id, message);
+    console.error('webhook processing failed', event.id, errText(e));
     // 500 makes Stripe retry; the ledger idempotency key makes the retry safe.
     return fail(500, 'Processing failed', 'webhook_failed');
   }

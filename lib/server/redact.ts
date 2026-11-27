@@ -1,12 +1,24 @@
 /**
- * Smallest local redaction for text that is stored or logged (e-mail, bearer, sk-, whsec_, long hex).
- * shortcut: PR 4 has the fuller helper; when PR 4 merges, switch callers to it and delete this file.
+ * Log redaction. Everything that reaches console.* from a catch block goes through `errText`
+ * so e-mail addresses, bearer tokens, API keys, auth tokens and SQL parameters never land in logs.
+ * shortcut: pattern based, so a secret in an unknown format is not caught; extend PATTERNS when a new key format is added.
  */
-export function redactText(text: string): string {
-  return text
-    .replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, '[email]')
-    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, 'Bearer [redacted]')
-    .replace(/\b(?:sk|rk|pk)[-_][A-Za-z0-9_-]{6,}/g, '[redacted]')
-    .replace(/\bwhsec_[A-Za-z0-9]+/g, '[redacted]')
-    .replace(/\b[0-9a-fA-F]{32,}\b/g, '[redacted]');
+const PATTERNS: [RegExp, string][] = [
+  [/\bparams?:[\s\S]*$/gi, 'params: [redacted]'], // drizzle / D1 errors append the bound values
+  [/\bBearer\s+[^\s"',;]+/gi, 'Bearer [redacted]'],
+  [/\bsk-[A-Za-z0-9_-]{8,}/g, '[redacted-key]'],
+  [/\bwasl_[a-f0-9]{16,}/gi, '[redacted-key]'],
+  [/\b[a-f0-9]{32,}\b/gi, '[redacted-token]'],
+  [/\b(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]+/g, '[redacted-key]'],
+  [/\bwhsec_[A-Za-z0-9]+/g, '[redacted-key]'],
+  [/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, '[redacted-email]'],
+];
+
+export function redact(text: string): string {
+  return PATTERNS.reduce((s, [re, to]) => s.replace(re, to), text);
+}
+
+/** Safe text for logging an unknown thrown value. */
+export function errText(e: unknown): string {
+  return redact(e instanceof Error ? `${e.name}: ${e.message}` : String(e)).slice(0, 500);
 }

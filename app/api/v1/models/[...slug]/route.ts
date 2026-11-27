@@ -1,7 +1,10 @@
 import { GET as getCatalog } from '../../../catalog/route';
+import { publicLimit } from '../../../../../lib/server/ratelimit';
 
 export const dynamic = 'force-dynamic';
 export async function GET(request: Request, context: { params: Promise<{slug:string[]}> }) {
+  const limited = await publicLimit(request, 'models', 60, 60, { 'Access-Control-Allow-Origin': '*' });
+  if (limited) return limited;
   const {slug}=await context.params;
   const id=slug.join('/');
   const response=await getCatalog();

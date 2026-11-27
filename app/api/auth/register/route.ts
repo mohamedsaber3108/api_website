@@ -1,13 +1,12 @@
 import { z } from 'zod';
 import { getDb } from '../../../../db';
 import { accounts } from '../../../../db/schema';
-import { baseUrl, isProduction, signupBonusMicroUsd, TERMS_VERSION } from '../../../../lib/server/config';
+import { baseUrl, isProduction, TERMS_VERSION } from '../../../../lib/server/config';
 import { audit } from '../../../../lib/server/audit';
 import { createAuthToken, createSession } from '../../../../lib/server/auth';
 import { hashPassword } from '../../../../lib/server/crypto';
 import { sendEmail } from '../../../../lib/server/email';
 import { clientIp, emailSchema, fail, handle, json, parseBody, passwordSchema, requireSameOrigin } from '../../../../lib/server/http';
-import { addLedgerEntry } from '../../../../lib/server/ledger';
 import { rateLimit } from '../../../../lib/server/ratelimit';
 
 export const dynamic = 'force-dynamic';
@@ -45,9 +44,6 @@ export const POST = handle(async request => {
     }
     throw e;
   }
-
-  const bonus = signupBonusMicroUsd();
-  if (bonus > 0) await addLedgerEntry({ userId, deltaMicroUsd: bonus, type: 'bonus', idempotencyKey: `bonus:signup:${userId}`, note: 'Sign-up credit' });
 
   const token = await createAuthToken(userId, 'verify_email', 48 * 3600 * 1000);
   const link = `${baseUrl(request)}/verify-email?token=${token}`;

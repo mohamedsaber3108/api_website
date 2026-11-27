@@ -7,7 +7,7 @@ import { hmacSha256Hex } from '../lib/server/crypto';
 import { newChatContext, parseChatRequest, runChat } from '../lib/server/gateway';
 import { addLedgerEntry, getAvailableMicroUsd, getBalanceMicroUsd, HOLD_KEEP_MS, purgeOldHolds } from '../lib/server/ledger';
 import { maybePurge, rateLimit, resetPurgeGate } from '../lib/server/ratelimit';
-import { redactText } from '../lib/server/redact';
+import { redact } from '../lib/server/redact';
 import { POST as webhook } from '../app/api/billing/webhook/route';
 import { makeUser, req, startDb } from './helpers/db';
 
@@ -86,9 +86,10 @@ describe('FU-1: rate-limit rows are purged', () => {
 });
 
 describe('FU-2: webhook errors are stored redacted', () => {
-  it('redactText hides e-mail, bearer, sk-, whsec_ and long hex', () => {
-    const out = redactText('x a@b.com Bearer abc.def sk_live_abcdef123 whsec_Zz9Zz9 ' + 'a'.repeat(40) + ' keep me');
-    expect(out).toBe('x [email] Bearer [redacted] [redacted] [redacted] [redacted] keep me');
+  it('redact hides e-mail, bearer, sk_live_, whsec_ and long hex', () => {
+    const out = redact('x a@b.com Bearer abc.def sk_live_abcdef123 whsec_Zz9Zz9 ' + 'a'.repeat(40) + ' keep me');
+    for (const s of ['a@b.com', 'abc.def', 'sk_live_abcdef123', 'whsec_Zz9Zz9', 'a'.repeat(40)]) expect(out).not.toContain(s);
+    expect(out).toContain('keep me');
   });
   it('a failure containing secrets is stored redacted in payment_webhook_events.error', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});

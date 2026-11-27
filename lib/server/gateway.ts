@@ -8,7 +8,7 @@ import { sha256Hex } from './crypto';
 import { findModel } from './catalog';
 import { closeHold, getAvailableMicroUsd, ledgerInsert, reserveCredit } from './ledger';
 import { rateLimit } from './ratelimit';
-import { redactText } from './redact';
+import { errText } from './redact';
 import { HttpError } from './http';
 
 export class GatewayError extends Error {
@@ -25,7 +25,7 @@ export function gatewayErrorResponse(e: unknown): Response {
         ? new GatewayError(e.status, e.code ?? 'error', e.message, e.headers)
         : null;
   if (!g) {
-    console.error('Gateway failure', e instanceof Error ? `${e.name}: ${e.message}` : e);
+    console.error('Gateway failure', errText(e));
     return Response.json({ error: { message: 'Internal server error', type: 'server_error', code: 'internal_error' } }, { status: 500, headers: { 'Cache-Control': 'no-store' } });
   }
   return Response.json({ error: { message: g.message, type: g.status >= 500 ? 'server_error' : 'invalid_request_error', code: g.code, ...g.extra } }, { status: g.status, headers: { 'Cache-Control': 'no-store', ...g.headers } });
@@ -162,7 +162,7 @@ async function recordUsage(ctx: ChatContext, model: string, billing: Billing, us
       closeHold(ctx.requestId, status === 'error' ? 'released' : 'settled'),
     ]);
   } catch (e) {
-    console.error('usage metering failed', ctx.requestId, redactText(e instanceof Error ? e.message : String(e)));
+    console.error('usage metering failed', ctx.requestId, errText(e));
     if (holdMicro !== null) console.error('hold left open after failed settle; it expires on its own, reconcile if charged', ctx.requestId);
   }
   return { charged, inTokens, outTokens };
