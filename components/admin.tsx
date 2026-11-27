@@ -1,19 +1,20 @@
 'use client';
 import { useCallback, useEffect, useState } from 'react';
-import { Activity, Cpu, FileClock, LayoutDashboard, LifeBuoy, ShieldCheck, Users } from 'lucide-react';
+import { Activity, Cpu, FileClock, LayoutDashboard, LifeBuoy, ShieldCheck, SlidersHorizontal, Users } from 'lucide-react';
 import { api, ApiError, errorMessage, usd, type SessionInfo } from '../lib/client-api';
 import { approvalCodeMessage } from '../lib/admin-error';
 import Dialog from './dialog';
 import MfaPanel from './mfa';
+import SettingsTab from './admin-settings';
 
-type Tab = 'overview' | 'users' | 'approvals' | 'tickets' | 'models' | 'incidents' | 'audit';
+type Tab = 'overview' | 'users' | 'approvals' | 'tickets' | 'models' | 'settings' | 'incidents' | 'audit';
 type Overview = { users: { total: number; last30Days: number }; activeKeys: number; openTickets: number; revenueLast30DaysMinor: number; usageLast30Days: { requests: number; billedMicroUsd: number; providerMicroUsd: number }; customerCreditsOutstandingMicroUsd: number; recentSignups: { id: string; email: string; name: string | null; createdAt: number }[] };
 type User = { id: string; email: string; name: string | null; role: string; status: string; provider: string; emailVerified: boolean; createdAt: number; lastLoginAt: number | null; balanceMicroUsd: number };
 type Ticket = { id: string; email: string; name: string; subject: string; status: string; priority: string; createdAt: number; updatedAt: number | null };
 type Msg = { id: string; authorRole: string; authorName: string; body: string; createdAt: number };
 type Incident = { id: string; title: string; body: string; status: string; severity: string; createdAt: number; resolvedAt: number | null };
 type AuditEvent = { id: string; seq: number | null; actorId: string | null; actorEmail: string | null; actorRole: string | null; action: string; targetType: string | null; targetId: string | null; ip: string | null; createdAt: number; meta: unknown; before: unknown; after: unknown; reason: string | null; result: 'success' | 'denied' | 'failed' | null };
-type Req = { id: string; kind: 'credit_adjustment' | 'role_change'; status: string; payload: { amountUsd?: number; note?: string; role?: string; from?: string }; reason: string; target: { id: string; email: string | null }; requestedBy: { id: string; email: string | null }; createdAt: number; expiresAt: number };
+type Req = { id: string; kind: 'credit_adjustment' | 'role_change' | 'flag_change'; status: string; payload: { amountUsd?: number; note?: string; role?: string; from?: string; flag?: string }; reason: string; target: { id: string; email: string | null }; requestedBy: { id: string; email: string | null }; createdAt: number; expiresAt: number };
 type ModelCfg = { modelId: string; enabled: boolean; markupPercent: number | null; note: string | null; updatedAt: number };
 
 export default function AdminConsole({ lang, session }: { lang: 'ar' | 'en'; session: SessionInfo }) {
@@ -36,6 +37,7 @@ export default function AdminConsole({ lang, session }: { lang: 'ar' | 'en'; ses
     { id: 'approvals', icon: ShieldCheck, label: tr('الموافقات', 'Approvals'), admin: true },
     { id: 'tickets', icon: LifeBuoy, label: tr('التذاكر', 'Tickets'), admin: false },
     { id: 'models', icon: Cpu, label: tr('النماذج والتسعير', 'Models & pricing'), admin: true },
+    { id: 'settings', icon: SlidersHorizontal, label: tr('الإعدادات', 'Settings'), admin: true },
     { id: 'incidents', icon: Activity, label: tr('الحوادث', 'Incidents'), admin: false },
     { id: 'audit', icon: FileClock, label: tr('سجل التدقيق', 'Audit log'), admin: true, superOnly: true },
   ];
@@ -50,6 +52,7 @@ export default function AdminConsole({ lang, session }: { lang: 'ar' | 'en'; ses
         {tab === 'approvals' && <ApprovalsTab tr={tr} fmt={fmt} me={session.user?.id ?? ''} isSuper={isSuper} />}
         {tab === 'tickets' && <TicketsTab tr={tr} fmt={fmt} />}
         {tab === 'models' && <ModelsTab tr={tr} fmt={fmt} />}
+        {tab === 'settings' && <SettingsTab tr={tr} fmt={fmt} />}
         {tab === 'incidents' && <IncidentsTab tr={tr} fmt={fmt} canEdit={isAdmin} />}
         {tab === 'audit' && (isSuper ? <AuditTab tr={tr} fmt={fmt} /> : <div className="dash-panel"><h3>{tr('سجل التدقيق', 'Audit log')}</h3><p className="muted" role="status">{tr('سجل التدقيق للمديرين الأعلى فقط.', 'The audit log is for super admins only.')}</p></div>)}
       </div></section></main>;
@@ -129,8 +132,8 @@ function ApprovalsTab({ tr, fmt, me, isSuper }: P & { me: string; isSuper: boole
   const [busy, setBusy] = useState(false);
   const load = useCallback(() => api<{ requests: Req[] }>('/api/admin/requests').then(r => setItems(r.requests)).catch(e => setError(errorMessage(e))), []);
   useEffect(() => { load(); }, [load]);
-  const describe = (r: Req) => r.kind === 'credit_adjustment' ? <>{tr('رصيد ', 'Credit ')}<bdi>{usd((r.payload.amountUsd ?? 0) * 1e6)}</bdi>{tr(' إلى ', ' for ')}<bdi>{r.target.email}</bdi></> : <>{tr('ترقية ', 'Promote ')}<bdi>{r.target.email}</bdi>{tr(' إلى ', ' to ')}<bdi>{String(r.payload.role)}</bdi></>;
-  const canApprove = (r: Req) => r.requestedBy.id !== me && r.target.id !== me && (r.kind === 'credit_adjustment' || isSuper);
+  const describe = (r: Req) => r.kind === 'flag_change' ? <>{tr('تشغيل الاستدلال المدفوع', 'Turn on paid inference')} (<bdi>{String(r.payload.flag)}</bdi>)</> : r.kind === 'credit_adjustment' ? <>{tr('رصيد ', 'Credit ')}<bdi>{usd((r.payload.amountUsd ?? 0) * 1e6)}</bdi>{tr(' إلى ', ' for ')}<bdi>{r.target.email}</bdi></> : <>{tr('ترقية ', 'Promote ')}<bdi>{r.target.email}</bdi>{tr(' إلى ', ' to ')}<bdi>{String(r.payload.role)}</bdi></>;
+  const canApprove = (r: Req) => r.requestedBy.id !== me && r.target.id !== me && (r.kind !== 'role_change' || isSuper);
   const close = () => { setOpen(null); setStepUp(false); setDialogError(''); };
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();

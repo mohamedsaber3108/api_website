@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { getDb } from '../../db';
 import { accounts, apiKeys, modelConfigs, usageEvents } from '../../db/schema';
 import { defaultMarkupPercent, features } from './config';
+import { flagEnabled } from './flags';
 import { sha256Hex } from './crypto';
 import { findModel } from './catalog';
 import { closeHold, getAvailableMicroUsd, ledgerInsert, reserveCredit } from './ledger';
@@ -178,7 +179,7 @@ function sanitizeUsage(payload: Record<string, unknown>) {
 
 /** Runs one metered chat completion. Returns the HTTP response to send to the caller. */
 export async function runChat(ctx: ChatContext, body: ChatRequest, signal?: AbortSignal): Promise<Response> {
-  if (!features.inference()) {
+  if (!features.inference() || !(await flagEnabled('inference'))) {
     throw new GatewayError(503, 'service_not_activated', 'Paid Wasl inference is not activated on this deployment.', { 'Retry-After': '3600' });
   }
   const billing = await resolveBilling(body.model);

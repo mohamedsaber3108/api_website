@@ -5,6 +5,7 @@ import { accounts, apiKeys, sessions, usageEvents } from '../../../db/schema';
 import { audit } from '../../../lib/server/audit';
 import { requireUser } from '../../../lib/server/auth';
 import { features } from '../../../lib/server/config';
+import { inferenceEnabled } from '../../../lib/server/flags';
 import { fail, handle, json, parseBody, requireSameOrigin } from '../../../lib/server/http';
 import { verifyPassword } from '../../../lib/server/crypto';
 import { keyColumns } from '../../../lib/server/keys';
@@ -54,7 +55,7 @@ export const GET = handle(async request => {
     month: { requests: Number(month?.requests ?? 0), costMicroUsd: Number(month?.costMicroUsd ?? 0), tokens: Number(month?.tokens ?? 0) },
     keys,
     usage: events,
-    service: { keyIssuance: true, inference: features.inference(), checkout: features.billing() },
+    service: { keyIssuance: true, inference: await inferenceEnabled(), checkout: features.billing() },
   });
 });
 

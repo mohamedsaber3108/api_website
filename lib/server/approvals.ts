@@ -7,6 +7,7 @@ import { adminEmails } from './config';
 import { HttpError } from './http';
 import { addLedgerEntry } from './ledger';
 import { assertRecentMfa } from './mfa';
+import { isFlagKey, setFlag } from './flags';
 
 /**
  * Second-approver workflow (SEC-2). A credit adjustment, or a promotion to admin or super_admin, is stored as a
@@ -15,7 +16,7 @@ import { assertRecentMfa } from './mfa';
  */
 
 export const REQUEST_TTL_MS = 24 * 3600 * 1000;
-export type RequestKind = 'credit_adjustment' | 'role_change';
+export type RequestKind = 'credit_adjustment' | 'role_change' | 'flag_change';
 export type RequestRow = typeof adminRequests.$inferSelect;
 type Actor = Pick<Principal, 'userId' | 'role' | 'mfaVerifiedAt'>;
 
@@ -136,10 +137,14 @@ async function applyRequest(r: RequestRow, approver: Actor): Promise<void> {
   const db = getDb();
   const [target] = await db.select({ status: accounts.status }).from(accounts).where(eq(accounts.userId, r.targetUserId)).limit(1);
   if (!target || target.status === 'deleted') throw new HttpError(404, 'User not found', 'not_found');
-  const p = JSON.parse(r.payload) as { amountUsd?: number; note?: string; role?: string; from?: string };
+  const p = JSON.parse(r.payload) as { amountUsd?: number; note?: string; role?: string; from?: string; flag?: string; enabled?: boolean };
   if (r.kind === 'credit_adjustment') {
     // The idempotency key is the request id, so the ledger can never take this request twice.
     await addLedgerEntry({ userId: r.targetUserId, deltaMicroUsd: Math.round((p.amountUsd ?? 0) * 1e6), type: 'adjustment', idempotencyKey: `adjust-request:${r.id}`, note: p.note, createdBy: approver.userId });
+  } else if (r.kind === 'flag_change') {
+    // Only "turn on" is ever requested; turning off never needs a second person.
+    if (!isFlagKey(p.flag) || p.enabled !== true) throw new HttpError(409, 'This request is not valid. Make a new one.', 'request_stale');
+    await setFlag(p.flag, true, approver.userId);
   } else {
     // Only from the role the request was made for, so a retry never overwrites a later change.
     const changed = await db.update(accounts).set({ role: p.role as string }).where(and(eq(accounts.userId, r.targetUserId), eq(accounts.role, p.from ?? ''))).returning({ id: accounts.userId });
@@ -168,9 +173,9 @@ export async function decideRequest(request: Request, actor: Actor, id: string, 
     if (isRequester) await deny(403, 'You cannot approve your own request. Another admin must approve it.', 'self_approval');
     if (r.targetUserId === actor.userId) await deny(403, 'You cannot approve a request about your own account.', 'self_target');
     if (!mayDecide) await deny(403, r.kind === 'role_change' ? 'Only a super admin can approve a role change.' : 'Forbidden', r.kind === 'role_change' ? 'super_admin_required' : 'forbidden');
-    if (r.kind === 'credit_adjustment') {
+    if (r.kind === 'credit_adjustment' || r.kind === 'flag_change') {
       try {
-        assertRecentMfa(actor); // money: MFA verified in the last 15 minutes
+        assertRecentMfa(actor); // money and the emergency stop: MFA verified in the last 15 minutes
       } catch (e) {
         if (e instanceof HttpError) await deny(e.status, e.message, e.code ?? 'mfa_recent_required');
         throw e;
@@ -205,6 +210,7 @@ export async function decideRequest(request: Request, actor: Actor, id: string, 
         // approved (it must not go back to pending: that would let any approver apply it), and the same approver may retry in the window.
         await audit(request, actor.userId, 'admin.request_approved', dupTarget, { requestId: id, kind: cur.kind, requestedBy: cur.requestedBy, duplicate: true, ...dp }, { reason, actorRole: actor.role, after: { status: next }, sensitive: true });
         if (cur.kind === 'credit_adjustment') await audit(request, actor.userId, 'admin.credit_adjustment', dupTarget, { amountUsd: dp.amountUsd, note: dp.note, requestId: id, duplicate: true }, { reason, actorRole: actor.role, after: { amountUsd: dp.amountUsd }, sensitive: true });
+        else if (cur.kind === 'flag_change') await audit(request, actor.userId, 'admin.flag_changed', { type: 'feature_flag', id: String(dp.flag) }, { flag: dp.flag, enabled: dp.enabled, requestId: id, duplicate: true }, { reason, actorRole: actor.role, after: { enabled: dp.enabled }, sensitive: true });
         else await audit(request, actor.userId, 'admin.user_updated', dupTarget, { role: dp.role, requestId: id, duplicate: true }, { reason, actorRole: actor.role, before: { role: dp.from }, after: { role: dp.role }, sensitive: true });
         try {
           await applyRequest(cur, actor);
@@ -229,6 +235,7 @@ export async function decideRequest(request: Request, actor: Actor, id: string, 
     if (action === 'approve') {
       // Same audit actions the direct routes wrote before, so existing audit views keep working.
       if (r.kind === 'credit_adjustment') await audit(request, actor.userId, 'admin.credit_adjustment', target, { amountUsd: p.amountUsd, note: p.note, requestId: id }, { reason, actorRole: actor.role, after: { amountUsd: p.amountUsd }, sensitive: true });
+      else if (r.kind === 'flag_change') await audit(request, actor.userId, 'admin.flag_changed', { type: 'feature_flag', id: String(p.flag) }, { flag: p.flag, enabled: p.enabled, requestId: id }, { reason, actorRole: actor.role, before: { enabled: false }, after: { enabled: p.enabled }, sensitive: true });
       else await audit(request, actor.userId, 'admin.user_updated', target, { role: p.role, requestId: id }, { reason, actorRole: actor.role, before: { role: p.from }, after: { role: p.role }, sensitive: true });
     }
   } catch (e) {
