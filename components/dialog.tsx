@@ -5,10 +5,12 @@ const FOCUSABLE = 'a[href],button:not([disabled]),input:not([disabled]),select:n
 
 /**
  * Modal dialog: focus moves in on open and returns on close, Tab and Shift+Tab stay inside, Esc closes.
- * A click outside does not close it, so typed text is not lost by accident. Layout uses logical properties, so it works in RTL.
+ * A click outside does not close it unless `closeOnBackdrop` is set (use that for read-only sheets, not for forms), so typed text is not lost by accident.
+ * Layout uses logical properties, so it works in RTL.
  * `alert` makes it an alertdialog (for a time-out warning) and `describedBy` names the element that holds its message.
+ * Without `title`, pass `label` (the accessible name) and render your own heading; `cardClass` and `backdropClass` keep an existing look.
  */
-export default function Dialog({ title, onClose, children, alert = false, describedBy }: { title: React.ReactNode; onClose: () => void; children: React.ReactNode; alert?: boolean; describedBy?: string }) {
+export default function Dialog({ title, label, onClose, children, alert = false, describedBy, cardClass = 'modal-card', backdropClass = 'modal-backdrop', closeOnBackdrop = false }: { title?: React.ReactNode; label?: string; onClose: () => void; children: React.ReactNode; alert?: boolean; describedBy?: string; cardClass?: string; backdropClass?: string; closeOnBackdrop?: boolean }) {
   const box = useRef<HTMLDivElement>(null);
   const titleId = useId();
   const close = useRef(onClose);
@@ -31,6 +33,6 @@ export default function Dialog({ title, onClose, children, alert = false, descri
     document.addEventListener('keydown', onKey, true);
     return () => { document.removeEventListener('keydown', onKey, true); before?.focus?.(); };
   }, []);
-  return <div className="modal-backdrop"><div className="modal-card" role={alert ? 'alertdialog' : 'dialog'} aria-modal="true" aria-labelledby={titleId} aria-describedby={describedBy} ref={box} tabIndex={-1}>
-    <h3 id={titleId}>{title}</h3>{children}</div></div>;
+  return <div className={backdropClass} onMouseDown={closeOnBackdrop ? e => { if (e.target === e.currentTarget) close.current(); } : undefined}><div className={cardClass} role={alert ? 'alertdialog' : 'dialog'} aria-modal="true" aria-labelledby={title ? titleId : undefined} aria-label={title ? undefined : label} aria-describedby={describedBy} ref={box} tabIndex={-1}>
+    {title && <h3 id={titleId}>{title}</h3>}{children}</div></div>;
 }
