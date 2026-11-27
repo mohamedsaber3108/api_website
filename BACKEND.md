@@ -57,6 +57,8 @@ Money rules for `POST /api/v1/chat/completions` and the playground (`lib/server/
 5. **Stream cut (aborted).** If the client leaves or the provider connection drops, the usage row gets `status = aborted` and the call is charged: from the provider's `usage` (cost, else tokens) if the provider sent it before the cut; otherwise from the input estimate plus the output actually delivered (`characters / 3` tokens). In every case the charge is capped at the hold. An aborted call is never free: the input is always charged.
 6. **Rounding.** Charge = `ceil(provider cost x (1 + markup%))` in whole micro-USD, integer arithmetic only. A provider cost above 0 charges at least 1 micro-USD.
 
+7. **Balance views (FU-5).** `GET /api/v1/balance` (scope `usage`), `GET /api/billing` and `GET /api/account` return the ledger balance, the open unexpired holds and the available amount (`balance - held`), all from one statement (`getBalanceSummary`). Existing fields are unchanged. `/api/v1/balance` adds `available_usd`, `available_micro_usd` and `held_micro_usd` next to `balance_usd`; `/api/billing` and `/api/account` add `heldMicroUsd` and `availableMicroUsd` next to `balanceMicroUsd`. The dashboard shows one text line: balance, held for running requests, available. A 402 means `available` is below the worst-case cost of the call.
+
 Known limit: the provider may bill us for tokens it generated after the client left; the delivered-output estimate can be lower than that.
 
 ## Admin approvals and roles (SEC-2)

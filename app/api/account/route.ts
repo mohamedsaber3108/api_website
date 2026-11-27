@@ -8,7 +8,7 @@ import { features } from '../../../lib/server/config';
 import { fail, handle, json, parseBody, requireSameOrigin } from '../../../lib/server/http';
 import { verifyPassword } from '../../../lib/server/crypto';
 import { keyColumns } from '../../../lib/server/keys';
-import { getBalanceMicroUsd } from '../../../lib/server/ledger';
+import { getBalanceSummary } from '../../../lib/server/ledger';
 
 export const dynamic = 'force-dynamic';
 
@@ -18,7 +18,7 @@ export const GET = handle(async request => {
   const monthStart = new Date();
   monthStart.setUTCDate(1);
   monthStart.setUTCHours(0, 0, 0, 0);
-  const [keys, events, [month], balance, [acct]] = await Promise.all([
+  const [keys, events, [month], summary, [acct]] = await Promise.all([
     db.select(keyColumns).from(apiKeys).where(and(eq(apiKeys.userId, user.userId), isNull(apiKeys.revokedAt))).orderBy(desc(apiKeys.createdAt)),
     db
       .select({ id: usageEvents.id, model: usageEvents.model, inputTokens: usageEvents.inputTokens, outputTokens: usageEvents.outputTokens, costMicroUsd: usageEvents.costMicroUsd, createdAt: usageEvents.createdAt, status: usageEvents.status, source: usageEvents.source })
@@ -34,7 +34,7 @@ export const GET = handle(async request => {
       })
       .from(usageEvents)
       .where(and(eq(usageEvents.userId, user.userId), gte(usageEvents.createdAt, monthStart.getTime()))),
-    getBalanceMicroUsd(user.userId),
+    getBalanceSummary(user.userId),
     db.select({ preferences: accounts.preferences, createdAt: accounts.createdAt }).from(accounts).where(eq(accounts.userId, user.userId)).limit(1),
   ]);
   return json({
@@ -48,7 +48,9 @@ export const GET = handle(async request => {
       createdAt: acct?.createdAt ?? null,
       preferences: acct?.preferences ? JSON.parse(acct.preferences) : {},
     },
-    balanceMicroUsd: balance,
+    balanceMicroUsd: summary.balanceMicroUsd,
+    heldMicroUsd: summary.heldMicroUsd,
+    availableMicroUsd: summary.availableMicroUsd,
     month: { requests: Number(month?.requests ?? 0), costMicroUsd: Number(month?.costMicroUsd ?? 0), tokens: Number(month?.tokens ?? 0) },
     keys,
     usage: events,

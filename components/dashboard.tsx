@@ -7,9 +7,9 @@ type Lang = 'ar' | 'en';
 type Tab = 'overview' | 'keys' | 'usage' | 'billing' | 'support' | 'settings';
 type Key = { id: string; name: string; prefix: string; scopes: string; createdAt: number; lastUsedAt: number | null; expiresAt: number | null; rateLimitPerMin: number };
 type UsageRow = { id: string; model: string; inputTokens: number; outputTokens: number; costMicroUsd: number; createdAt: number; status: string; source: string };
-type Account = { account: { email: string; name: string; role: string; provider: string; emailVerified: boolean; preferences: Record<string, string> }; balanceMicroUsd: number; month: { requests: number; costMicroUsd: number; tokens: number }; keys: Key[]; usage: UsageRow[]; service: { inference: boolean; checkout: boolean } };
+type Account = { account: { email: string; name: string; role: string; provider: string; emailVerified: boolean; preferences: Record<string, string> }; balanceMicroUsd: number; heldMicroUsd: number; availableMicroUsd: number; month: { requests: number; costMicroUsd: number; tokens: number }; keys: Key[]; usage: UsageRow[]; service: { inference: boolean; checkout: boolean } };
 type Summary = { days: number; daily: { day: string; requests: number; tokens: number; costMicroUsd: number }[]; byModel: { model: string; requests: number; inputTokens: number; outputTokens: number; costMicroUsd: number }[]; totals: { requests: number; errors: number; costMicroUsd: number } | undefined };
-type Billing = { balanceMicroUsd: number; packages: number[]; checkoutEnabled: boolean; emailVerified: boolean; transactions: { id: string; deltaMicroUsd: number; type: string; note: string | null; createdAt: number }[]; payments: { id: string; amountMinor: number; status: string; createdAt: number }[]; invoices: { id: string; number: string; amountMinor: number; currency: string; description: string; issuedAt: number }[] };
+type Billing = { balanceMicroUsd: number; heldMicroUsd: number; availableMicroUsd: number; packages: number[]; checkoutEnabled: boolean; emailVerified: boolean; transactions: { id: string; deltaMicroUsd: number; type: string; note: string | null; createdAt: number }[]; payments: { id: string; amountMinor: number; status: string; createdAt: number }[]; invoices: { id: string; number: string; amountMinor: number; currency: string; description: string; issuedAt: number }[] };
 type Ticket = { id: string; subject: string; status: string; createdAt: number; updatedAt: number | null };
 type Msg = { id: string; authorRole: string; authorName: string; body: string; createdAt: number };
 
@@ -69,13 +69,21 @@ function VerifyBanner({ ar }: { ar: boolean }) {
     {msg && <small>{msg}</small>}{dev && <a href={`/verify-email?token=${dev}`}>dev: verify</a>}</div>;
 }
 
+/** One text line: balance, held for running requests, available. Labels carry the meaning, not colour. */
+function BalanceLine({ ar, balance, held, available, digits = 2 }: { ar: boolean; balance: number; held: number; available: number; digits?: number }) {
+  const num = (m: number) => <bdi dir="ltr">{usd(m, digits)}</bdi>;
+  return ar
+    ? <span className="balance-line">الرصيد {num(balance)}، محجوز للطلبات الجارية {num(held)}، المتاح {num(available)}</span>
+    : <span className="balance-line">Balance {num(balance)}, held for running requests {num(held)}, available {num(available)}</span>;
+}
+
 function Overview({ ar, data, fmt, setTab }: { ar: boolean; data: Account; fmt: (t: number) => string; setTab: (t: Tab) => void }) {
   const tr = (a: string, e: string) => (ar ? a : e);
   const [summary, setSummary] = useState<Summary | null>(null);
   useEffect(() => { api<Summary>('/api/account/usage?days=14').then(setSummary).catch(() => setSummary(null)); }, []);
   return <>
     <div className="stat-grid four">
-      <div className="stat-card"><span><Wallet size={19} /> {tr('الرصيد', 'Balance')}</span><strong>{usd(data.balanceMicroUsd)}</strong><small><button className="link" onClick={() => setTab('billing')}>{tr('شحن الرصيد', 'Add credits')}</button></small></div>
+      <div className="stat-card"><span><Wallet size={19} /> {tr('الرصيد', 'Balance')}</span><strong>{usd(data.balanceMicroUsd)}</strong><small><BalanceLine ar={ar} balance={data.balanceMicroUsd} held={data.heldMicroUsd} available={data.availableMicroUsd} /> </small><small><button className="link" onClick={() => setTab('billing')}>{tr('شحن الرصيد', 'Add credits')}</button></small></div>
       <div className="stat-card"><span><Zap size={19} /> {tr('طلبات هذا الشهر', 'Requests this month')}</span><strong>{data.month.requests.toLocaleString()}</strong><small>{data.month.tokens.toLocaleString()} tokens</small></div>
       <div className="stat-card"><span><CreditCard size={19} /> {tr('إنفاق الشهر', 'Spend this month')}</span><strong>{usd(data.month.costMicroUsd, 4)}</strong></div>
       <div className="stat-card"><span><KeyRound size={19} /> {tr('مفاتيح فعّالة', 'Active keys')}</span><strong>{data.keys.length}</strong><small><button className="link" onClick={() => setTab('keys')}>{tr('إدارة', 'Manage')}</button></small></div>
@@ -142,6 +150,7 @@ function BillingTab({ ar, fmt }: { ar: boolean; fmt: (t: number) => string }) {
     try { const r = await api<{ url: string }>('/api/billing/checkout', { method: 'POST', body: { amountUsd } }); window.location.assign(r.url); } catch (e) { setError(errorMessage(e)); setBusy(false); }
   }
   return <><div className="dash-panel"><h3>{tr('الرصيد', 'Balance')}: {b ? usd(b.balanceMicroUsd, 4) : '…'}</h3>
+    {b && <p className="muted"><BalanceLine ar={ar} balance={b.balanceMicroUsd} held={b.heldMicroUsd} available={b.availableMicroUsd} digits={4} /></p>}
     {status === 'success' && <p className="auth-info">{tr('تم استلام الدفع. يُضاف الرصيد خلال لحظات بعد تأكيد المزوّد.', 'Payment received. Credits appear shortly after the provider confirms.')}</p>}
     {status === 'cancelled' && <p className="muted">{tr('أُلغيت عملية الدفع.', 'Checkout was cancelled.')}</p>}
     {error && <p className="live-error" role="alert">{error}</p>}
